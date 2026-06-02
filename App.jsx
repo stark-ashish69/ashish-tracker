@@ -135,7 +135,7 @@ export default function App() {
         <div style={S.headerLeft}>
           <span style={S.logo}>⬡</span>
           <div>
-            <div style={S.appName}>TASKFORGE</div>
+            <div style={S.appName}>STARK TRACKER</div>
             <div style={S.appSub}>Daily · Weekly · Monthly Tracker</div>
           </div>
         </div>
