@@ -1,334 +1,813 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+//  CONSTANTS
+// ─────────────────────────────────────────────
+const STORAGE_KEY = "stark_tracker_v2";
+
+const QUOTES = [
+  "Small steps every day. Big results every year.",
+  "Discipline is the bridge between goals and accomplishment.",
+  "You don't rise to the level of your goals, you fall to your habits.",
+  "The secret of getting ahead is getting started.",
+  "Consistency beats intensity. Every. Single. Time.",
+  "One day or day one. You decide.",
+  "Build the life you want, one habit at a time.",
+  "Success is the sum of small efforts repeated daily.",
+  "Don't count the days. Make the days count.",
+  "Your future self is watching you right now.",
+];
+
+const CATEGORIES = ["Skill", "Fitness", "Health", "Work", "Reading", "Personal", "Other"];
+const PRIORITIES = ["High", "Medium", "Low"];
+const COLORS = [
+  "#7effa0", "#5b8fff", "#ff7eb3", "#ffd166",
+  "#ff6b6b", "#67e8f9", "#c4b5fd", "#fb923c",
+];
+const PRIORITY_COLOR = { High: "#ff6b6b", Medium: "#ffd166", Low: "#6bceff" };
+const PRIORITY_BG    = { High: "rgba(255,107,107,0.1)", Medium: "rgba(255,209,102,0.1)", Low: "rgba(107,206,255,0.1)" };
+
 const TODAY = () => new Date().toISOString().slice(0, 10);
-const KEY = "ashish_tasktracker_v2";
 
-const load = () => {
-  try { return JSON.parse(localStorage.getItem(KEY)) || null; } catch { return null; }
+const formatDate = (str) => {
+  const [y, m, d] = str.split("-");
+  return new Date(y, m - 1, d).toLocaleDateString("en-IN", {
+    weekday: "long", day: "numeric", month: "long", year: "numeric",
+  });
 };
-const save = (data) => localStorage.setItem(KEY, JSON.stringify(data));
 
-const emptyState = () => ({
-  tasks: [],          // { id, name, category, color, createdAt, archived }
-  logs: {},           // { "YYYY-MM-DD": { taskId: "done"|"skip"|"" } }
+const shortDate = (str) => {
+  const [y, m, d] = str.split("-");
+  return new Date(y, m - 1, d).toLocaleDateString("en-IN", {
+    weekday: "short", day: "numeric", month: "short",
+  });
+};
+
+const daysInMonth = (y, m) => new Date(y, m, 0).getDate();
+
+// ─────────────────────────────────────────────
+//  STORAGE
+// ─────────────────────────────────────────────
+const loadState = () => {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || null; }
+  catch { return null; }
+};
+
+const saveState = (s) => localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+
+const initState = () => ({
+  tasks: [],
+  logs: {},       // { "YYYY-MM-DD": { taskId: "done"|"skip"|"" } }
+  notes: {},      // { "YYYY-MM-DD": string }
+  weekGoals: {},  // { "YYYY-WW": number }
   nextId: 1,
 });
 
-const CATS = ["Skill", "Health", "Work", "Personal", "Reading", "Fitness", "Other"];
-const COLORS = ["#6EE7B7","#93C5FD","#FCA5A5","#FDE68A","#C4B5FD","#FB923C","#F9A8D4","#67E8F9"];
+// ─────────────────────────────────────────────
+//  STREAK CALCULATOR
+// ─────────────────────────────────────────────
+const calcStreak = (taskId, logs) => {
+  let streak = 0;
+  const d = new Date(); d.setHours(0,0,0,0);
+  // check yesterday first (today may not be done yet)
+  d.setDate(d.getDate() - 1);
+  while (true) {
+    const key = d.toISOString().slice(0, 10);
+    if ((logs[key] || {})[taskId] === "done") { streak++; d.setDate(d.getDate() - 1); }
+    else break;
+  }
+  // also count today if done
+  const todayKey = TODAY();
+  if ((logs[todayKey] || {})[taskId] === "done") streak++;
+  return streak;
+};
 
-const weeks = (date) => {
-  const d = new Date(date);
+const calcLongestStreak = (taskId, logs) => {
+  const dates = Object.keys(logs).sort();
+  let max = 0, cur = 0, prev = null;
+  for (const d of dates) {
+    if ((logs[d] || {})[taskId] === "done") {
+      if (prev) {
+        const diff = (new Date(d) - new Date(prev)) / 86400000;
+        cur = diff === 1 ? cur + 1 : 1;
+      } else cur = 1;
+      max = Math.max(max, cur);
+      prev = d;
+    } else { cur = 0; prev = null; }
+  }
+  return max;
+};
+
+// week number helper
+const weekNum = (dateStr) => {
+  const d = new Date(dateStr);
   const jan1 = new Date(d.getFullYear(), 0, 1);
   return Math.ceil(((d - jan1) / 86400000 + jan1.getDay() + 1) / 7);
 };
 
-const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
+const weekKey = (dateStr) => `${dateStr.slice(0,4)}-W${String(weekNum(dateStr)).padStart(2,"0")}`;
 
-const fmt = (dateStr) => {
-  const [y, m, d] = dateStr.split("-");
-  return new Date(y, m - 1, d).toLocaleDateString("en-IN", { day: "numeric", month: "short", weekday: "short" });
-};
+// ─────────────────────────────────────────────
+//  CONFETTI
+// ─────────────────────────────────────────────
+function Confetti({ active }) {
+  if (!active) return null;
+  const pieces = Array.from({ length: 40 }, (_, i) => ({
+    id: i,
+    left: Math.random() * 100,
+    color: COLORS[i % COLORS.length],
+    delay: Math.random() * 1.5,
+    duration: 2 + Math.random() * 2,
+    size: 6 + Math.random() * 8,
+  }));
+  return (
+    <div style={{ position:"fixed", inset:0, pointerEvents:"none", zIndex:999, overflow:"hidden" }}>
+      {pieces.map(p => (
+        <div key={p.id} style={{
+          position:"absolute", left:`${p.left}%`, top:-20,
+          width:p.size, height:p.size,
+          background:p.color, borderRadius: p.id%3===0 ? "50%" : 2,
+          animation:`confettiFall ${p.duration}s ${p.delay}s ease-in forwards`,
+        }} />
+      ))}
+    </div>
+  );
+}
 
-// ── main ─────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+//  TOAST
+// ─────────────────────────────────────────────
+function Toast({ msg }) {
+  if (!msg) return null;
+  return (
+    <div style={{
+      position:"fixed", bottom:32, left:"50%",
+      transform:"translateX(-50%)",
+      background:"linear-gradient(135deg,#1a1a28,#22223a)",
+      border:"1px solid var(--border-bright)",
+      color:"var(--text)", padding:"12px 24px",
+      borderRadius:40, fontSize:13, fontWeight:600,
+      zIndex:500, whiteSpace:"nowrap",
+      boxShadow:"0 8px 32px rgba(0,0,0,0.6)",
+      animation:"toastSlide 0.3s ease forwards",
+    }}>{msg}</div>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  MODAL
+// ─────────────────────────────────────────────
+function Modal({ title, onClose, children }) {
+  useEffect(() => {
+    const handler = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+  return (
+    <div onClick={e => e.target===e.currentTarget && onClose()} style={{
+      position:"fixed", inset:0,
+      background:"rgba(7,7,9,0.85)",
+      backdropFilter:"blur(12px)",
+      display:"flex", alignItems:"center", justifyContent:"center",
+      zIndex:400, padding:16,
+    }}>
+      <div className="scale-in" style={{
+        background:"var(--bg2)",
+        border:"1px solid var(--border-bright)",
+        borderRadius:20, padding:"28px 24px",
+        width:"min(92vw,440px)",
+        boxShadow:"0 40px 100px rgba(0,0,0,0.8)",
+        maxHeight:"90vh", overflowY:"auto",
+      }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:24 }}>
+          <span style={{ fontFamily:"Syne,sans-serif", fontWeight:800, fontSize:17 }}>{title}</span>
+          <button onClick={onClose} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text2)", width:32, height:32, borderRadius:"50%", cursor:"pointer", fontSize:16, display:"flex", alignItems:"center", justifyContent:"center" }}>✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// form helpers
+const Label = ({ children }) => (
+  <div style={{ fontSize:11, fontWeight:700, letterSpacing:1.5, color:"var(--text2)", marginBottom:6, marginTop:18, textTransform:"uppercase" }}>{children}</div>
+);
+const Input = ({ style, ...props }) => (
+  <input style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"11px 14px", borderRadius:10, fontSize:14, ...style }} {...props} />
+);
+const Select = ({ children, ...props }) => (
+  <select style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"11px 14px", borderRadius:10, fontSize:14 }} {...props}>{children}</select>
+);
+const PrimaryBtn = ({ children, style, ...props }) => (
+  <button style={{ width:"100%", padding:"13px", background:"linear-gradient(135deg,var(--accent),var(--accent2))", color:"#07070e", border:"none", borderRadius:12, fontWeight:800, fontSize:14, cursor:"pointer", fontFamily:"Syne,sans-serif", letterSpacing:0.5, marginTop:20, ...style }} {...props}>{children}</button>
+);
+
+// ─────────────────────────────────────────────
+//  RING SVG
+// ─────────────────────────────────────────────
+function Ring({ pct, color, size=80, stroke=7 }) {
+  const r = (size - stroke * 2) / 2;
+  const c = 2 * Math.PI * r;
+  const offset = c - (pct / 100) * c;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth={stroke} />
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={stroke}
+        strokeDasharray={c} strokeDashoffset={offset} strokeLinecap="round"
+        transform={`rotate(-90 ${size/2} ${size/2})`}
+        style={{ transition:"stroke-dashoffset 1s ease" }}
+      />
+      <text x={size/2} y={size/2+5} textAnchor="middle" fill="#fff" fontSize={size*0.18} fontWeight={800} fontFamily="Syne,sans-serif">{pct}%</text>
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  MINI SPARKLINE
+// ─────────────────────────────────────────────
+function Sparkline({ data, color }) {
+  if (!data || data.length < 2) return null;
+  const w = 80, h = 28;
+  const max = Math.max(...data, 1);
+  const pts = data.map((v, i) => `${(i / (data.length-1)) * w},${h - (v/max)*h}`).join(" ");
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
+      <polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  MAIN APP
+// ─────────────────────────────────────────────
 export default function App() {
-  const [state, setState] = useState(() => load() || emptyState());
-  const [view, setView] = useState("day");       // day | week | month | tasks
+  const [state, setState] = useState(() => loadState() || initState());
+  const [view, setView] = useState("day");
   const [selectedDate, setSelectedDate] = useState(TODAY());
   const [showAdd, setShowAdd] = useState(false);
-  const [editTask, setEditTask] = useState(null); // task obj being edited
-  const [newTask, setNewTask] = useState({ name: "", category: "Skill", color: COLORS[0] });
+  const [editTask, setEditTask] = useState(null);
+  const [newTask, setNewTask] = useState({ name:"", category:"Skill", priority:"Medium", color:COLORS[0], timeEst:"" });
   const [toast, setToast] = useState("");
+  const [confetti, setConfetti] = useState(false);
+  const [darkMode] = useState(true);
+  const [reminderTime, setReminderTime] = useState(localStorage.getItem("stark_reminder")||"");
+  const [showReminder, setShowReminder] = useState(false);
+  const confettiTimer = useRef(null);
 
-  useEffect(() => { save(state); }, [state]);
+  useEffect(() => { saveState(state); }, [state]);
 
-  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2200); };
+  const showToast = useCallback((msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(""), 2500);
+  }, []);
 
-  // active tasks (not archived)
+  const triggerConfetti = useCallback(() => {
+    setConfetti(true);
+    clearTimeout(confettiTimer.current);
+    confettiTimer.current = setTimeout(() => setConfetti(false), 4000);
+  }, []);
+
+  const quote = QUOTES[new Date().getDate() % QUOTES.length];
   const activeTasks = state.tasks.filter(t => !t.archived);
+
+  // ── log ──
+  const getStatus = (taskId, date) => (state.logs[date] || {})[taskId] || "";
+
+  const setStatus = (taskId, date, newStatus) => {
+    setState(s => {
+      const dayLog = { ...(s.logs[date] || {}) };
+      dayLog[taskId] = dayLog[taskId] === newStatus ? "" : newStatus;
+      const newState = { ...s, logs: { ...s.logs, [date]: dayLog } };
+      // check if all done today
+      const allDone = activeTasks.every(t => (newState.logs[date]||{})[t.id] === "done");
+      if (allDone && activeTasks.length > 0) triggerConfetti();
+      return newState;
+    });
+  };
+
+  // ── notes ──
+  const setNote = (date, text) => setState(s => ({ ...s, notes: { ...s.notes, [date]: text } }));
+
+  // ── week goal ──
+  const setWeekGoal = (wk, val) => setState(s => ({ ...s, weekGoals: { ...s.weekGoals, [wk]: val } }));
 
   // ── task CRUD ──
   const addTask = () => {
     if (!newTask.name.trim()) return;
     setState(s => ({
       ...s,
-      tasks: [...s.tasks, { id: s.nextId, ...newTask, name: newTask.name.trim(), createdAt: TODAY(), archived: false }],
+      tasks: [...s.tasks, { id:s.nextId, ...newTask, name:newTask.name.trim(), createdAt:TODAY(), archived:false }],
       nextId: s.nextId + 1,
     }));
-    setNewTask({ name: "", category: "Skill", color: COLORS[0] });
+    setNewTask({ name:"", category:"Skill", priority:"Medium", color:COLORS[0], timeEst:"" });
     setShowAdd(false);
-    showToast("Task added ✓");
+    showToast("✅ Task added!");
   };
 
   const saveEdit = () => {
-    setState(s => ({
-      ...s,
-      tasks: s.tasks.map(t => t.id === editTask.id ? { ...editTask } : t),
-    }));
+    setState(s => ({ ...s, tasks: s.tasks.map(t => t.id===editTask.id ? {...editTask} : t) }));
     setEditTask(null);
-    showToast("Task updated ✓");
+    showToast("✏️ Task updated!");
   };
 
   const archiveTask = (id) => {
-    setState(s => ({ ...s, tasks: s.tasks.map(t => t.id === id ? { ...t, archived: true } : t) }));
-    showToast("Task archived");
+    setState(s => ({ ...s, tasks: s.tasks.map(t => t.id===id ? {...t, archived:true} : t) }));
+    showToast("📦 Task archived");
+  };
+
+  const unarchiveTask = (id) => {
+    setState(s => ({ ...s, tasks: s.tasks.map(t => t.id===id ? {...t, archived:false} : t) }));
+    showToast("♻️ Task restored");
   };
 
   const deleteTask = (id) => {
+    if (!confirm("Permanently delete this task and all its logs?")) return;
     setState(s => ({
       ...s,
-      tasks: s.tasks.filter(t => t.id !== id),
-      logs: Object.fromEntries(Object.entries(s.logs).map(([d, v]) => {
-        const copy = { ...v }; delete copy[id]; return [d, copy];
-      }))
+      tasks: s.tasks.filter(t => t.id!==id),
+      logs: Object.fromEntries(Object.entries(s.logs).map(([d,v]) => {
+        const copy = {...v}; delete copy[id]; return [d, copy];
+      })),
     }));
-    showToast("Task deleted");
+    showToast("🗑 Task deleted");
   };
 
-  // ── log toggle ──
-  const toggleLog = (taskId, date, status) => {
-    setState(s => {
-      const dayLog = { ...(s.logs[date] || {}) };
-      dayLog[taskId] = dayLog[taskId] === status ? "" : status;
-      return { ...s, logs: { ...s.logs, [date]: dayLog } };
+  // ── range helpers ──
+  const weekDates = (ref) => {
+    const d = new Date(ref);
+    const day = d.getDay();
+    const mon = new Date(d); mon.setDate(d.getDate() - ((day+6)%7));
+    return Array.from({length:7}, (_,i) => {
+      const x = new Date(mon); x.setDate(mon.getDate()+i);
+      return x.toISOString().slice(0,10);
     });
   };
 
-  const getStatus = (taskId, date) => (state.logs[date] || {})[taskId] || "";
+  const monthDates = (ref) => {
+    const [y,m] = ref.split("-").map(Number);
+    return Array.from({length:daysInMonth(y,m)}, (_,i) =>
+      `${y}-${String(m).padStart(2,"0")}-${String(i+1).padStart(2,"0")}`
+    );
+  };
 
-  // ── stats helpers ──
-  const taskCompletionForRange = (taskId, dates) => {
+  const rangeStats = (taskId, dates) => {
     const relevant = dates.filter(d => {
-      const task = state.tasks.find(t => t.id === taskId);
+      const task = state.tasks.find(t => t.id===taskId);
       return task && d >= task.createdAt;
     });
     if (!relevant.length) return null;
-    const done = relevant.filter(d => getStatus(taskId, d) === "done").length;
-    return { done, total: relevant.length, pct: Math.round((done / relevant.length) * 100) };
+    const done = relevant.filter(d => getStatus(taskId,d)==="done").length;
+    const skip = relevant.filter(d => getStatus(taskId,d)==="skip").length;
+    return { done, skip, total:relevant.length, pct:Math.round((done/relevant.length)*100) };
   };
 
-  const weekDates = (refDate) => {
-    const d = new Date(refDate);
-    const day = d.getDay();
-    const mon = new Date(d); mon.setDate(d.getDate() - ((day + 6) % 7));
-    return Array.from({ length: 7 }, (_, i) => {
-      const x = new Date(mon); x.setDate(mon.getDate() + i);
-      return x.toISOString().slice(0, 10);
-    });
+  // ── reminder ──
+  const saveReminder = () => {
+    localStorage.setItem("stark_reminder", reminderTime);
+    if (Notification.permission !== "granted") {
+      Notification.requestPermission();
+    }
+    setShowReminder(false);
+    showToast(`🔔 Reminder set for ${reminderTime}`);
   };
 
-  const monthDates = (refDate) => {
-    const [y, m] = refDate.split("-").map(Number);
-    const days = daysInMonth(y, m - 1);
-    return Array.from({ length: days }, (_, i) => `${y}-${String(m).padStart(2,"0")}-${String(i+1).padStart(2,"0")}`);
-  };
-
-  // ── render ────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────
+  //  RENDER
+  // ─────────────────────────────────────────────
   return (
-    <div style={S.root}>
-      {/* grain overlay */}
-      <div style={S.grain} />
+    <div style={{ minHeight:"100vh", background:"var(--bg)", position:"relative", overflow:"hidden" }}>
+      {/* Background blobs */}
+      <div style={{ position:"fixed", width:600, height:600, borderRadius:"50%", background:"radial-gradient(circle,rgba(126,255,160,0.04) 0%,transparent 70%)", top:-200, left:-200, pointerEvents:"none" }} />
+      <div style={{ position:"fixed", width:500, height:500, borderRadius:"50%", background:"radial-gradient(circle,rgba(91,143,255,0.04) 0%,transparent 70%)", bottom:-100, right:-100, pointerEvents:"none" }} />
 
-      {/* HEADER */}
-      <header style={S.header}>
-        <div style={S.headerLeft}>
-          <span style={S.logo}>⬡</span>
+      <Confetti active={confetti} />
+      <Toast msg={toast} />
+
+      {/* ── HEADER ── */}
+      <header style={{
+        display:"flex", justifyContent:"space-between", alignItems:"center",
+        padding:"18px 28px", borderBottom:"1px solid var(--border)",
+        background:"rgba(7,7,9,0.85)", backdropFilter:"blur(20px)",
+        position:"sticky", top:0, zIndex:100,
+      }}>
+        <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+          <div style={{
+            width:38, height:38, background:"linear-gradient(135deg,var(--accent),var(--accent2))",
+            borderRadius:10, display:"flex", alignItems:"center", justifyContent:"center",
+            fontWeight:900, fontSize:18, color:"#07070e", fontFamily:"Syne,sans-serif",
+          }}>S</div>
           <div>
-            <div style={S.appName}>STARK TRACKER</div>
-            <div style={S.appSub}>Daily · Weekly · Monthly Tracker</div>
+            <div style={{ fontFamily:"Syne,sans-serif", fontWeight:800, fontSize:18, letterSpacing:2 }}>STARK TRACKER</div>
+            <div style={{ fontSize:10, color:"var(--text3)", letterSpacing:2 }}>DAILY · WEEKLY · MONTHLY</div>
           </div>
         </div>
-        <div style={S.headerRight}>
-          <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} style={S.datePick} />
-          <button style={S.addBtn} onClick={() => setShowAdd(true)}>＋ Add Task</button>
+        <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+          <input type="date" value={selectedDate} onChange={e=>setSelectedDate(e.target.value)}
+            style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text2)", padding:"8px 12px", borderRadius:10, fontSize:13, fontFamily:"DM Sans,sans-serif" }}
+          />
+          <button onClick={() => setShowReminder(true)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text2)", padding:"8px 14px", borderRadius:10, fontSize:13, cursor:"pointer" }}>🔔</button>
+          <button onClick={() => setShowAdd(true)} style={{
+            background:"linear-gradient(135deg,var(--accent),var(--accent2))",
+            color:"#07070e", border:"none", padding:"9px 20px",
+            borderRadius:10, fontWeight:800, fontSize:13, cursor:"pointer",
+            fontFamily:"Syne,sans-serif", letterSpacing:0.5,
+          }}>＋ Add Task</button>
         </div>
       </header>
 
-      {/* NAV */}
-      <nav style={S.nav}>
-        {[["day","📅 Day"],["week","📊 Week"],["month","🗓 Month"],["tasks","⚙️ Manage"]].map(([v,label]) => (
-          <button key={v} style={{ ...S.navBtn, ...(view===v ? S.navActive : {}) }} onClick={() => setView(v)}>{label}</button>
+      {/* ── QUOTE BANNER ── */}
+      <div style={{
+        background:"linear-gradient(90deg,rgba(126,255,160,0.06),rgba(91,143,255,0.06))",
+        borderBottom:"1px solid var(--border)",
+        padding:"10px 28px", fontSize:12, color:"var(--text2)",
+        fontStyle:"italic", letterSpacing:0.3,
+      }}>
+        ✦ &nbsp;{quote}
+      </div>
+
+      {/* ── NAV ── */}
+      <nav style={{
+        display:"flex", borderBottom:"1px solid var(--border)",
+        background:"var(--bg2)", position:"sticky", top:73, zIndex:99,
+      }}>
+        {[["day","📅 Day"],["week","📊 Week"],["month","🗓 Month"],["stats","📈 Stats"],["manage","⚙️ Manage"]].map(([v,label]) => (
+          <button key={v} onClick={() => setView(v)} style={{
+            flex:1, padding:"14px 0", background:"transparent", border:"none",
+            borderBottom: view===v ? "2px solid var(--accent)" : "2px solid transparent",
+            color: view===v ? "var(--accent)" : "var(--text3)",
+            fontSize:12, fontWeight:700, cursor:"pointer", letterSpacing:1,
+            fontFamily:"Syne,sans-serif", transition:"all .2s",
+          }}>{label}</button>
         ))}
       </nav>
 
-      {/* VIEWS */}
-      <main style={S.main}>
-        {view === "day"   && <DayView   activeTasks={activeTasks} selectedDate={selectedDate} getStatus={getStatus} toggleLog={toggleLog} fmt={fmt} />}
-        {view === "week"  && <WeekView  activeTasks={activeTasks} weekDates={weekDates} selectedDate={selectedDate} getStatus={getStatus} toggleLog={toggleLog} taskCompletionForRange={taskCompletionForRange} />}
-        {view === "month" && <MonthView activeTasks={activeTasks} monthDates={monthDates} selectedDate={selectedDate} getStatus={getStatus} taskCompletionForRange={taskCompletionForRange} />}
-        {view === "tasks" && <TasksView activeTasks={activeTasks} archivedTasks={state.tasks.filter(t=>t.archived)} onEdit={setEditTask} onArchive={archiveTask} onDelete={deleteTask} />}
+      {/* ── MAIN ── */}
+      <main style={{ padding:"28px 24px", maxWidth:1100, margin:"0 auto" }}>
+        {view==="day"    && <DayView    state={state} activeTasks={activeTasks} selectedDate={selectedDate} getStatus={getStatus} setStatus={setStatus} setNote={setNote} shortDate={shortDate} formatDate={formatDate} calcStreak={calcStreak} />}
+        {view==="week"   && <WeekView   state={state} activeTasks={activeTasks} selectedDate={selectedDate} weekDates={weekDates} getStatus={getStatus} setStatus={setStatus} rangeStats={rangeStats} weekKey={weekKey} setWeekGoal={setWeekGoal} />}
+        {view==="month"  && <MonthView  state={state} activeTasks={activeTasks} selectedDate={selectedDate} monthDates={monthDates} getStatus={getStatus} rangeStats={rangeStats} />}
+        {view==="stats"  && <StatsView  state={state} activeTasks={activeTasks} calcStreak={calcStreak} calcLongestStreak={calcLongestStreak} monthDates={monthDates} weekDates={weekDates} getStatus={getStatus} rangeStats={rangeStats} />}
+        {view==="manage" && <ManageView state={state} activeTasks={activeTasks} onEdit={setEditTask} onArchive={archiveTask} onUnarchive={unarchiveTask} onDelete={deleteTask} />}
       </main>
 
-      {/* ADD MODAL */}
+      {/* ── ADD MODAL ── */}
       {showAdd && (
         <Modal title="Add New Task" onClose={() => setShowAdd(false)}>
-          <label style={S.label}>Task Name</label>
-          <input style={S.input} placeholder="e.g. Learn React, Morning Run…" value={newTask.name}
-            onChange={e => setNewTask(n => ({...n, name: e.target.value}))}
-            onKeyDown={e => e.key === "Enter" && addTask()} autoFocus />
-          <label style={S.label}>Category</label>
-          <select style={S.input} value={newTask.category} onChange={e => setNewTask(n => ({...n, category: e.target.value}))}>
-            {CATS.map(c => <option key={c}>{c}</option>)}
-          </select>
-          <label style={S.label}>Color Tag</label>
-          <div style={S.colorRow}>
-            {COLORS.map(c => (
-              <div key={c} onClick={() => setNewTask(n => ({...n, color: c}))}
-                style={{ ...S.colorDot, background: c, outline: newTask.color===c ? "3px solid #fff" : "none" }} />
+          <Label>Task Name</Label>
+          <Input placeholder="e.g. Morning Run, Learn React…" value={newTask.name}
+            onChange={e=>setNewTask(n=>({...n,name:e.target.value}))}
+            onKeyDown={e=>e.key==="Enter"&&addTask()} autoFocus />
+          <Label>Category</Label>
+          <Select value={newTask.category} onChange={e=>setNewTask(n=>({...n,category:e.target.value}))}>
+            {CATEGORIES.map(c=><option key={c}>{c}</option>)}
+          </Select>
+          <Label>Priority</Label>
+          <div style={{ display:"flex", gap:8, marginTop:4 }}>
+            {PRIORITIES.map(p=>(
+              <button key={p} onClick={()=>setNewTask(n=>({...n,priority:p}))} style={{
+                flex:1, padding:"9px 0", borderRadius:10, cursor:"pointer", fontSize:12, fontWeight:700,
+                border:`1px solid ${newTask.priority===p ? PRIORITY_COLOR[p] : "var(--border)"}`,
+                background: newTask.priority===p ? PRIORITY_BG[p] : "var(--bg3)",
+                color: newTask.priority===p ? PRIORITY_COLOR[p] : "var(--text2)",
+              }}>{p}</button>
             ))}
           </div>
-          <button style={S.modalBtn} onClick={addTask}>Add Task →</button>
+          <Label>Est. Time (optional)</Label>
+          <Input placeholder="e.g. 30 mins, 1 hr" value={newTask.timeEst}
+            onChange={e=>setNewTask(n=>({...n,timeEst:e.target.value}))} />
+          <Label>Color Tag</Label>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:4 }}>
+            {COLORS.map(c=>(
+              <div key={c} onClick={()=>setNewTask(n=>({...n,color:c}))} style={{
+                width:28, height:28, borderRadius:"50%", background:c, cursor:"pointer",
+                outline: newTask.color===c ? `3px solid ${c}` : "none",
+                outlineOffset:3, transition:"transform .15s",
+              }} />
+            ))}
+          </div>
+          <PrimaryBtn onClick={addTask}>Add Task →</PrimaryBtn>
         </Modal>
       )}
 
-      {/* EDIT MODAL */}
+      {/* ── EDIT MODAL ── */}
       {editTask && (
-        <Modal title="Edit Task" onClose={() => setEditTask(null)}>
-          <label style={S.label}>Task Name</label>
-          <input style={S.input} value={editTask.name}
-            onChange={e => setEditTask(t => ({...t, name: e.target.value}))} autoFocus />
-          <label style={S.label}>Category</label>
-          <select style={S.input} value={editTask.category} onChange={e => setEditTask(t => ({...t, category: e.target.value}))}>
-            {CATS.map(c => <option key={c}>{c}</option>)}
-          </select>
-          <label style={S.label}>Color Tag</label>
-          <div style={S.colorRow}>
-            {COLORS.map(c => (
-              <div key={c} onClick={() => setEditTask(t => ({...t, color: c}))}
-                style={{ ...S.colorDot, background: c, outline: editTask.color===c ? "3px solid #fff" : "none" }} />
+        <Modal title="Edit Task" onClose={()=>setEditTask(null)}>
+          <Label>Task Name</Label>
+          <Input value={editTask.name} onChange={e=>setEditTask(t=>({...t,name:e.target.value}))} autoFocus />
+          <Label>Category</Label>
+          <Select value={editTask.category} onChange={e=>setEditTask(t=>({...t,category:e.target.value}))}>
+            {CATEGORIES.map(c=><option key={c}>{c}</option>)}
+          </Select>
+          <Label>Priority</Label>
+          <div style={{ display:"flex", gap:8, marginTop:4 }}>
+            {PRIORITIES.map(p=>(
+              <button key={p} onClick={()=>setEditTask(t=>({...t,priority:p}))} style={{
+                flex:1, padding:"9px 0", borderRadius:10, cursor:"pointer", fontSize:12, fontWeight:700,
+                border:`1px solid ${editTask.priority===p ? PRIORITY_COLOR[p] : "var(--border)"}`,
+                background: editTask.priority===p ? PRIORITY_BG[p] : "var(--bg3)",
+                color: editTask.priority===p ? PRIORITY_COLOR[p] : "var(--text2)",
+              }}>{p}</button>
             ))}
           </div>
-          <button style={S.modalBtn} onClick={saveEdit}>Save Changes →</button>
+          <Label>Est. Time</Label>
+          <Input value={editTask.timeEst||""} onChange={e=>setEditTask(t=>({...t,timeEst:e.target.value}))} placeholder="e.g. 30 mins" />
+          <Label>Color Tag</Label>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:4 }}>
+            {COLORS.map(c=>(
+              <div key={c} onClick={()=>setEditTask(t=>({...t,color:c}))} style={{
+                width:28, height:28, borderRadius:"50%", background:c, cursor:"pointer",
+                outline: editTask.color===c ? `3px solid ${c}` : "none",
+                outlineOffset:3,
+              }} />
+            ))}
+          </div>
+          <PrimaryBtn onClick={saveEdit}>Save Changes →</PrimaryBtn>
         </Modal>
       )}
 
-      {/* TOAST */}
-      {toast && <div style={S.toast}>{toast}</div>}
+      {/* ── REMINDER MODAL ── */}
+      {showReminder && (
+        <Modal title="Daily Reminder 🔔" onClose={()=>setShowReminder(false)}>
+          <p style={{ color:"var(--text2)", fontSize:13, lineHeight:1.6, marginBottom:4 }}>
+            Set a daily reminder to log your tasks. Your browser will send a notification at this time.
+          </p>
+          <Label>Reminder Time</Label>
+          <Input type="time" value={reminderTime} onChange={e=>setReminderTime(e.target.value)} />
+          <PrimaryBtn onClick={saveReminder}>Set Reminder →</PrimaryBtn>
+        </Modal>
+      )}
     </div>
   );
 }
 
-// ── DAY VIEW ─────────────────────────────────────────────────────────────────
-function DayView({ activeTasks, selectedDate, getStatus, toggleLog, fmt }) {
-  const done = activeTasks.filter(t => getStatus(t.id, selectedDate) === "done").length;
+// ─────────────────────────────────────────────
+//  DAY VIEW
+// ─────────────────────────────────────────────
+function DayView({ state, activeTasks, selectedDate, getStatus, setStatus, setNote, formatDate, calcStreak }) {
+  const done = activeTasks.filter(t => getStatus(t.id, selectedDate)==="done").length;
   const total = activeTasks.length;
   const pct = total ? Math.round((done/total)*100) : 0;
+  const note = state.notes[selectedDate] || "";
+  const isToday = selectedDate === new Date().toISOString().slice(0,10);
+
+  // sort by priority
+  const sorted = [...activeTasks].sort((a,b) => {
+    const order = { High:0, Medium:1, Low:2 };
+    return (order[a.priority]||1) - (order[b.priority]||1);
+  });
 
   return (
-    <div>
-      <div style={S.viewTitle}>
-        <span>{fmt(selectedDate)}</span>
-        <span style={S.viewSub}>{done}/{total} completed · {pct}%</span>
-      </div>
-      <div style={S.progressBar}><div style={{ ...S.progressFill, width: `${pct}%` }} /></div>
-
-      {activeTasks.length === 0 && <Empty />}
-
-      <div style={S.taskGrid}>
-        {activeTasks.map(task => {
-          const status = getStatus(task.id, selectedDate);
-          return (
-            <div key={task.id} style={{ ...S.taskCard, borderLeft: `4px solid ${task.color}` }}>
-              <div style={S.taskCardTop}>
-                <span style={{ ...S.dot, background: task.color }} />
-                <div>
-                  <div style={S.taskName}>{task.name}</div>
-                  <div style={S.taskCat}>{task.category}</div>
-                </div>
-              </div>
-              <div style={S.btnRow}>
-                <button style={{ ...S.statusBtn, ...(status==="done" ? S.btnDone : {}) }}
-                  onClick={() => toggleLog(task.id, selectedDate, "done")}>
-                  {status==="done" ? "✓ Done" : "Mark Done"}
-                </button>
-                <button style={{ ...S.statusBtn, ...(status==="skip" ? S.btnSkip : {}) }}
-                  onClick={() => toggleLog(task.id, selectedDate, "skip")}>
-                  {status==="skip" ? "⊘ Skipped" : "Skip"}
-                </button>
-              </div>
+    <div className="fade-up">
+      {/* date + progress */}
+      <div style={{ marginBottom:24 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", marginBottom:14 }}>
+          <div>
+            <div style={{ fontFamily:"Syne,sans-serif", fontWeight:800, fontSize:22 }}>
+              {isToday ? "Today" : formatDate(selectedDate).split(",")[0]}
             </div>
-          );
-        })}
+            <div style={{ color:"var(--text2)", fontSize:13, marginTop:2 }}>{formatDate(selectedDate)}</div>
+          </div>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ fontFamily:"Syne,sans-serif", fontWeight:800, fontSize:28, color: pct===100?"var(--accent)":"var(--text)" }}>{pct}%</div>
+            <div style={{ color:"var(--text2)", fontSize:12 }}>{done}/{total} done</div>
+          </div>
+        </div>
+        {/* progress bar */}
+        <div style={{ height:6, background:"var(--bg3)", borderRadius:4, overflow:"hidden" }}>
+          <div style={{
+            height:"100%", borderRadius:4,
+            width:`${pct}%`,
+            background: pct===100
+              ? "linear-gradient(90deg,var(--accent),#00e5ff)"
+              : "linear-gradient(90deg,var(--accent2),var(--accent))",
+            transition:"width .8s cubic-bezier(.4,0,.2,1)",
+            animation:"progressGrow 1s ease",
+          }} />
+        </div>
+        {pct===100 && total>0 && (
+          <div style={{ textAlign:"center", marginTop:10, color:"var(--accent)", fontWeight:700, fontSize:13, animation:"pulse 2s infinite" }}>
+            🎉 All tasks done! Incredible work!
+          </div>
+        )}
+      </div>
+
+      {/* tasks grid */}
+      {activeTasks.length === 0
+        ? <EmptyState />
+        : <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))", gap:14 }}>
+            {sorted.map((task, idx) => (
+              <DayTaskCard key={task.id} task={task} status={getStatus(task.id,selectedDate)}
+                onToggle={(s)=>setStatus(task.id,selectedDate,s)}
+                streak={calcStreak(task.id, state.logs)}
+                animDelay={idx*0.05}
+              />
+            ))}
+          </div>
+      }
+
+      {/* daily note */}
+      <div style={{ marginTop:32, background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:20 }}>
+        <div style={{ fontFamily:"Syne,sans-serif", fontWeight:700, fontSize:13, marginBottom:10, color:"var(--text2)" }}>📝 Daily Note</div>
+        <textarea
+          value={note}
+          onChange={e=>setNote(selectedDate, e.target.value)}
+          placeholder="How was your day? Any wins, blockers, reflections…"
+          style={{
+            width:"100%", background:"transparent", border:"none", color:"var(--text)",
+            fontSize:14, lineHeight:1.7, resize:"none", minHeight:80, outline:"none",
+            fontFamily:"DM Sans,sans-serif",
+          }}
+        />
       </div>
     </div>
   );
 }
 
-// ── WEEK VIEW ─────────────────────────────────────────────────────────────────
-function WeekView({ activeTasks, weekDates, selectedDate, getStatus, toggleLog, taskCompletionForRange }) {
+function DayTaskCard({ task, status, onToggle, streak, animDelay }) {
+  const isDone = status==="done";
+  const isSkip = status==="skip";
+  return (
+    <div className="fade-up" style={{
+      background: isDone
+        ? `linear-gradient(135deg,${task.color}12,${task.color}06)`
+        : "var(--bg2)",
+      border:`1px solid ${isDone ? task.color+"40" : "var(--border)"}`,
+      borderRadius:16, padding:18, transition:"all .2s",
+      animationDelay:`${animDelay}s`,
+      opacity: isSkip ? 0.5 : 1,
+    }}>
+      {/* top row */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <div style={{ width:10, height:10, borderRadius:"50%", background:task.color, flexShrink:0, boxShadow:`0 0 8px ${task.color}` }} />
+          <div>
+            <div style={{ fontWeight:700, fontSize:14, textDecoration:isSkip?"line-through":"none", color:isSkip?"var(--text3)":"var(--text)" }}>{task.name}</div>
+            <div style={{ fontSize:11, color:"var(--text3)", marginTop:2 }}>{task.category}{task.timeEst ? ` · ⏱ ${task.timeEst}` : ""}</div>
+          </div>
+        </div>
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:4 }}>
+          <span style={{
+            fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:20,
+            background:PRIORITY_BG[task.priority], color:PRIORITY_COLOR[task.priority],
+          }}>{task.priority}</span>
+          {streak > 0 && (
+            <span style={{ fontSize:11, color:"#ffd166", fontWeight:700, animation:"streakBounce 2s infinite" }}>
+              🔥 {streak}
+            </span>
+          )}
+        </div>
+      </div>
+      {/* buttons */}
+      <div style={{ display:"flex", gap:8 }}>
+        <button onClick={()=>onToggle("done")} style={{
+          flex:2, padding:"8px 0", borderRadius:10, fontSize:12, fontWeight:700, cursor:"pointer",
+          border:`1px solid ${isDone ? task.color : "var(--border)"}`,
+          background: isDone ? task.color : "var(--bg3)",
+          color: isDone ? "#07070e" : "var(--text2)",
+          transition:"all .15s",
+        }}>{isDone ? "✓ Done" : "Mark Done"}</button>
+        <button onClick={()=>onToggle("skip")} style={{
+          flex:1, padding:"8px 0", borderRadius:10, fontSize:12, fontWeight:700, cursor:"pointer",
+          border:`1px solid ${isSkip ? "var(--text2)" : "var(--border)"}`,
+          background: isSkip ? "var(--bg3)" : "transparent",
+          color: isSkip ? "var(--text)" : "var(--text3)",
+          transition:"all .15s",
+        }}>{isSkip ? "⊘" : "Skip"}</button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  WEEK VIEW
+// ─────────────────────────────────────────────
+function WeekView({ state, activeTasks, selectedDate, weekDates, getStatus, setStatus, rangeStats, weekKey, setWeekGoal }) {
   const dates = weekDates(selectedDate);
-  const dayNames = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  const DAY_LABELS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  const today = new Date().toISOString().slice(0,10);
+  const wk = weekKey(selectedDate);
+  const goal = state.weekGoals[wk] || 70;
+
+  const overallDone = activeTasks.reduce((acc, t) => {
+    const s = rangeStats(t.id, dates);
+    return s ? acc + s.done : acc;
+  }, 0);
+  const overallTotal = activeTasks.reduce((acc, t) => {
+    const s = rangeStats(t.id, dates);
+    return s ? acc + s.total : acc;
+  }, 0);
+  const overallPct = overallTotal ? Math.round((overallDone/overallTotal)*100) : 0;
 
   return (
-    <div>
-      <div style={S.viewTitle}>
-        <span>Weekly Report</span>
-        <span style={S.viewSub}>{dates[0]} → {dates[6]}</span>
+    <div className="fade-up">
+      {/* header */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", marginBottom:24 }}>
+        <div>
+          <div style={{ fontFamily:"Syne,sans-serif", fontWeight:800, fontSize:22 }}>Weekly Report</div>
+          <div style={{ color:"var(--text2)", fontSize:13, marginTop:2 }}>{dates[0]} → {dates[6]}</div>
+        </div>
+        <div style={{ textAlign:"right" }}>
+          <div style={{ fontSize:11, color:"var(--text2)", marginBottom:4 }}>
+            Weekly Goal: 
+            <select value={goal} onChange={e=>setWeekGoal(wk,Number(e.target.value))}
+              style={{ marginLeft:6, background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"2px 6px", borderRadius:6, fontSize:11 }}>
+              {[50,60,70,80,90,100].map(v=><option key={v}>{v}</option>)}
+            </select>
+            %
+          </div>
+          <div style={{ fontFamily:"Syne,sans-serif", fontWeight:800, fontSize:24, color: overallPct>=goal?"var(--accent)":"var(--text)" }}>{overallPct}%</div>
+          <div style={{ fontSize:11, color:"var(--text2)" }}>{overallDone}/{overallTotal} completions</div>
+        </div>
       </div>
 
-      {activeTasks.length === 0 && <Empty />}
+      {/* goal bar */}
+      <div style={{ marginBottom:24 }}>
+        <div style={{ height:6, background:"var(--bg3)", borderRadius:4, overflow:"hidden", position:"relative" }}>
+          <div style={{ height:"100%", width:`${overallPct}%`, background:"linear-gradient(90deg,var(--accent2),var(--accent))", borderRadius:4, transition:"width .8s ease" }} />
+          <div style={{ position:"absolute", top:-2, left:`${goal}%`, width:2, height:10, background:"var(--text2)", transform:"translateX(-50%)" }} title={`Goal: ${goal}%`} />
+        </div>
+        <div style={{ fontSize:11, color:"var(--text3)", marginTop:4 }}>▲ goal marker at {goal}%</div>
+      </div>
 
-      {/* heat grid */}
-      <div style={{ overflowX: "auto" }}>
-        <table style={S.table}>
-          <thead>
-            <tr>
-              <th style={S.th}>Task</th>
-              {dates.map((d,i) => (
-                <th key={d} style={{ ...S.th, color: d===TODAY() ? "#6EE7B7" : "#888" }}>
-                  {dayNames[i]}<br/><span style={{fontSize:10}}>{d.slice(8)}</span>
-                </th>
-              ))}
-              <th style={S.th}>Week %</th>
-            </tr>
-          </thead>
-          <tbody>
-            {activeTasks.map(task => {
-              const stats = taskCompletionForRange(task.id, dates);
-              return (
-                <tr key={task.id}>
-                  <td style={S.td}>
-                    <span style={{ ...S.dot, background: task.color }} />
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{task.name}</span>
-                    <div style={{ fontSize: 11, color: "#888" }}>{task.category}</div>
-                  </td>
-                  {dates.map(d => {
-                    const s = getStatus(task.id, d);
-                    return (
-                      <td key={d} style={S.td} onClick={() => toggleLog(task.id, d, s==="done"?"":"done")}>
-                        <div style={{ ...S.cell, background: s==="done" ? task.color : s==="skip" ? "#333" : "#1a1a1a",
-                          border: d===TODAY() ? `1px solid ${task.color}` : "1px solid #2a2a2a" }}>
-                          {s==="done" ? "✓" : s==="skip" ? "–" : ""}
+      {/* heat table */}
+      {activeTasks.length === 0 ? <EmptyState /> : (
+        <div style={{ overflowX:"auto", marginBottom:28 }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+            <thead>
+              <tr>
+                <th style={{ padding:"10px 12px", textAlign:"left", color:"var(--text2)", fontWeight:700, borderBottom:"1px solid var(--border)", whiteSpace:"nowrap" }}>Task</th>
+                {dates.map((d,i) => (
+                  <th key={d} style={{ padding:"10px 8px", textAlign:"center", color: d===today?"var(--accent)":"var(--text2)", fontWeight:700, borderBottom:"1px solid var(--border)", fontSize:11 }}>
+                    {DAY_LABELS[i]}<br/><span style={{fontSize:9,opacity:.6}}>{d.slice(8)}</span>
+                  </th>
+                ))}
+                <th style={{ padding:"10px 8px", textAlign:"center", color:"var(--text2)", fontWeight:700, borderBottom:"1px solid var(--border)" }}>%</th>
+              </tr>
+            </thead>
+            <tbody>
+              {activeTasks.map(task => {
+                const stats = rangeStats(task.id, dates);
+                return (
+                  <tr key={task.id} style={{ borderBottom:"1px solid var(--border)" }}>
+                    <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                        <div style={{ width:8, height:8, borderRadius:"50%", background:task.color }} />
+                        <div>
+                          <div style={{ fontWeight:600, fontSize:13 }}>{task.name}</div>
+                          <div style={{ fontSize:10, color:"var(--text3)" }}>{task.category}</div>
                         </div>
-                      </td>
-                    );
-                  })}
-                  <td style={{ ...S.td, textAlign: "center" }}>
-                    {stats ? (
-                      <span style={{ color: stats.pct>=70?"#6EE7B7":stats.pct>=40?"#FDE68A":"#FCA5A5", fontWeight:700 }}>
-                        {stats.pct}%
-                      </span>
-                    ) : "—"}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                      </div>
+                    </td>
+                    {dates.map(d => {
+                      const s = getStatus(task.id,d);
+                      return (
+                        <td key={d} style={{ padding:"6px", textAlign:"center" }}>
+                          <div onClick={()=>setStatus(task.id,d,s==="done"?"":"done")}
+                            title={d===today?"Today":d}
+                            style={{
+                              width:32, height:32, borderRadius:8, margin:"0 auto",
+                              display:"flex", alignItems:"center", justifyContent:"center",
+                              cursor:"pointer",
+                              background: s==="done" ? task.color : s==="skip" ? "var(--bg3)" : "var(--bg)",
+                              border:`1px solid ${d===today ? task.color+"60" : "var(--border)"}`,
+                              fontSize:14, fontWeight:700,
+                              color: s==="done" ? "#07070e" : "var(--text3)",
+                              transition:"all .15s",
+                            }}>
+                            {s==="done" ? "✓" : s==="skip" ? "—" : ""}
+                          </div>
+                        </td>
+                      );
+                    })}
+                    <td style={{ textAlign:"center", fontFamily:"Syne,sans-serif", fontWeight:800, fontSize:14 }}>
+                      {stats ? (
+                        <span style={{ color: stats.pct>=80?"var(--accent)":stats.pct>=50?"#ffd166":"#ff6b6b" }}>
+                          {stats.pct}%
+                        </span>
+                      ) : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* weekly summary cards */}
-      <div style={S.summaryGrid}>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))", gap:12 }}>
         {activeTasks.map(task => {
-          const stats = taskCompletionForRange(task.id, dates);
+          const stats = rangeStats(task.id, dates);
           if (!stats) return null;
           return (
-            <div key={task.id} style={{ ...S.summaryCard, borderTop: `3px solid ${task.color}` }}>
-              <div style={{ color: task.color, fontWeight: 700, fontSize: 13 }}>{task.name}</div>
-              <div style={{ fontSize: 28, fontWeight: 900, marginTop: 4 }}>{stats.pct}%</div>
-              <div style={{ fontSize: 11, color: "#888" }}>{stats.done} of {stats.total} days</div>
-              <div style={S.miniBar}><div style={{ ...S.miniFill, width:`${stats.pct}%`, background: task.color }} /></div>
+            <div key={task.id} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:14, padding:16, borderTop:`2px solid ${task.color}` }}>
+              <div style={{ fontWeight:700, fontSize:12, color:task.color, marginBottom:4 }}>{task.name}</div>
+              <div style={{ fontFamily:"Syne,sans-serif", fontWeight:900, fontSize:26 }}>{stats.pct}%</div>
+              <div style={{ fontSize:11, color:"var(--text3)" }}>{stats.done}/{stats.total} days</div>
+              <div style={{ height:3, background:"var(--bg3)", borderRadius:2, marginTop:8 }}>
+                <div style={{ height:"100%", width:`${stats.pct}%`, background:task.color, borderRadius:2, transition:"width .8s ease" }} />
+              </div>
             </div>
           );
         })}
@@ -337,107 +816,248 @@ function WeekView({ activeTasks, weekDates, selectedDate, getStatus, toggleLog, 
   );
 }
 
-// ── MONTH VIEW ────────────────────────────────────────────────────────────────
-function MonthView({ activeTasks, monthDates, selectedDate, getStatus, taskCompletionForRange }) {
+// ─────────────────────────────────────────────
+//  MONTH VIEW
+// ─────────────────────────────────────────────
+function MonthView({ state, activeTasks, selectedDate, monthDates, getStatus, rangeStats }) {
   const dates = monthDates(selectedDate);
   const [y, m] = selectedDate.split("-");
-  const monthName = new Date(y, m-1).toLocaleString("en-IN", { month: "long", year: "numeric" });
+  const monthName = new Date(y, m-1).toLocaleString("en-IN", { month:"long", year:"numeric" });
+  const today = new Date().toISOString().slice(0,10);
 
-  const overall = activeTasks.map(task => {
-    const stats = taskCompletionForRange(task.id, dates);
-    return { task, stats };
-  }).filter(x => x.stats);
-
-  const avgPct = overall.length ? Math.round(overall.reduce((a,x) => a + x.stats.pct, 0) / overall.length) : 0;
+  const overall = activeTasks.map(t => ({ task:t, stats:rangeStats(t.id,dates) })).filter(x=>x.stats);
+  const avgPct = overall.length ? Math.round(overall.reduce((a,x)=>a+x.stats.pct,0)/overall.length) : 0;
 
   return (
-    <div>
-      <div style={S.viewTitle}>
-        <span>Monthly Progress — {monthName}</span>
-        <span style={S.viewSub}>Overall avg: {avgPct}%</span>
-      </div>
-
-      {activeTasks.length === 0 && <Empty />}
-
-      {/* big progress rings row */}
-      <div style={S.ringRow}>
-        {overall.map(({ task, stats }) => (
-          <div key={task.id} style={S.ringCard}>
-            <Ring pct={stats.pct} color={task.color} />
-            <div style={{ fontWeight: 700, fontSize: 12, marginTop: 8, color: "#ddd" }}>{task.name}</div>
-            <div style={{ fontSize: 11, color: "#888" }}>{task.done} days done</div>
-          </div>
-        ))}
-      </div>
-
-      {/* monthly heatmap per task */}
-      {overall.map(({ task, stats }) => (
-        <div key={task.id} style={{ ...S.heatSection, borderLeft: `3px solid ${task.color}` }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <div>
-              <span style={{ fontWeight: 700, color: task.color }}>{task.name}</span>
-              <span style={{ fontSize: 11, color: "#888", marginLeft: 8 }}>{task.category}</span>
-            </div>
-            <span style={{ fontWeight: 800, color: stats.pct>=70?"#6EE7B7":stats.pct>=40?"#FDE68A":"#FCA5A5" }}>{stats.pct}%</span>
-          </div>
-          <div style={S.heatGrid}>
-            {dates.map(d => {
-              const s = getStatus(task.id, d);
-              return (
-                <div key={d} title={d} style={{
-                  ...S.heatCell,
-                  background: s==="done" ? task.color : s==="skip" ? "#2a2a2a" : "#111",
-                  opacity: s==="done" ? 1 : 0.5,
-                }}>
-                  <span style={{ fontSize: 9, color: s==="done"?"#000":"#555" }}>{d.slice(8)}</span>
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ fontSize: 11, color: "#666", marginTop: 6 }}>{stats.done}/{stats.total} days · {stats.pct}% completion</div>
+    <div className="fade-up">
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", marginBottom:24 }}>
+        <div>
+          <div style={{ fontFamily:"Syne,sans-serif", fontWeight:800, fontSize:22 }}>Monthly Progress</div>
+          <div style={{ color:"var(--text2)", fontSize:13, marginTop:2 }}>{monthName}</div>
         </div>
-      ))}
+        <div style={{ textAlign:"right" }}>
+          <div style={{ fontFamily:"Syne,sans-serif", fontWeight:800, fontSize:28, color:"var(--accent)" }}>{avgPct}%</div>
+          <div style={{ fontSize:12, color:"var(--text2)" }}>overall avg</div>
+        </div>
+      </div>
+
+      {activeTasks.length===0 ? <EmptyState /> : (
+        <>
+          {/* rings */}
+          <div style={{ display:"flex", flexWrap:"wrap", gap:16, marginBottom:32 }}>
+            {overall.map(({task,stats})=>(
+              <div key={task.id} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:20, textAlign:"center", minWidth:110 }}>
+                <Ring pct={stats.pct} color={task.color} size={80} />
+                <div style={{ fontWeight:700, fontSize:12, marginTop:10, color:task.color }}>{task.name}</div>
+                <div style={{ fontSize:11, color:"var(--text3)" }}>{stats.done} days</div>
+              </div>
+            ))}
+          </div>
+
+          {/* heatmaps */}
+          {overall.map(({task,stats})=>(
+            <div key={task.id} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderLeft:`3px solid ${task.color}`, borderRadius:14, padding:18, marginBottom:14 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+                <div>
+                  <span style={{ fontWeight:700, color:task.color }}>{task.name}</span>
+                  <span style={{ fontSize:11, color:"var(--text3)", marginLeft:8 }}>{task.category}{task.priority?` · ${task.priority}`:""}</span>
+                </div>
+                <span style={{ fontFamily:"Syne,sans-serif", fontWeight:800, color: stats.pct>=70?"var(--accent)":stats.pct>=40?"#ffd166":"#ff6b6b" }}>{stats.pct}%</span>
+              </div>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
+                {dates.map(d=>{
+                  const s = getStatus(task.id,d);
+                  return (
+                    <div key={d} title={d} style={{
+                      width:26, height:26, borderRadius:5,
+                      display:"flex", alignItems:"center", justifyContent:"center",
+                      background: s==="done" ? task.color : s==="skip" ? "#1e1e2a" : "var(--bg3)",
+                      border:`1px solid ${d===today?task.color+"80":"transparent"}`,
+                      transition:"all .2s",
+                    }}>
+                      <span style={{ fontSize:8, color: s==="done"?"#07070e":"var(--text3)", fontWeight:700 }}>{d.slice(8)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize:11, color:"var(--text3)", marginTop:8 }}>{stats.done}/{stats.total} days · {stats.skip} skipped</div>
+            </div>
+          ))}
+        </>
+      )}
     </div>
   );
 }
 
-// ── TASKS MANAGE ──────────────────────────────────────────────────────────────
-function TasksView({ activeTasks, archivedTasks, onEdit, onArchive, onDelete }) {
+// ─────────────────────────────────────────────
+//  STATS VIEW
+// ─────────────────────────────────────────────
+function StatsView({ state, activeTasks, calcStreak, calcLongestStreak, monthDates, weekDates, getStatus, rangeStats }) {
+  const today = new Date().toISOString().slice(0,10);
+  const thisMonthDates = monthDates(today);
+  const thisWeekDates = weekDates(today);
+
+  const DAY_NAMES = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+  // best day of week
+  const dayScores = Array(7).fill(0).map((_,i)=>({day:i,done:0,total:0}));
+  Object.entries(state.logs).forEach(([date, log]) => {
+    const dayIdx = new Date(date).getDay();
+    activeTasks.forEach(t => {
+      if (log[t.id]==="done") dayScores[dayIdx].done++;
+      if (log[t.id]) dayScores[dayIdx].total++;
+    });
+  });
+  const bestDay = dayScores.reduce((a,b) => (b.done>a.done?b:a), dayScores[0]);
+
+  // sparkline data (last 7 days completion %)
+  const last7 = Array.from({length:7}, (_,i) => {
+    const d = new Date(today); d.setDate(d.getDate()-6+i);
+    const key = d.toISOString().slice(0,10);
+    const done = activeTasks.filter(t=>getStatus(t.id,key)==="done").length;
+    return activeTasks.length ? Math.round((done/activeTasks.length)*100) : 0;
+  });
+
   return (
-    <div>
-      <div style={S.viewTitle}><span>Manage Tasks</span><span style={S.viewSub}>{activeTasks.length} active</span></div>
+    <div className="fade-up">
+      <div style={{ fontFamily:"Syne,sans-serif", fontWeight:800, fontSize:22, marginBottom:24 }}>Analytics & Stats</div>
 
-      {activeTasks.length === 0 && <Empty />}
+      {activeTasks.length===0 ? <EmptyState /> : (
+        <>
+          {/* top summary */}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))", gap:14, marginBottom:28 }}>
+            {[
+              { label:"Tasks Active", value:activeTasks.length, icon:"⚡", color:"var(--accent2)" },
+              { label:"Done Today", value:activeTasks.filter(t=>getStatus(t.id,today)==="done").length, icon:"✅", color:"var(--accent)" },
+              { label:"Best Day", value:DAY_NAMES[bestDay.day], icon:"🏆", color:"#ffd166" },
+              { label:"This Week Avg", value:`${Math.round(thisWeekDates.reduce((a,d)=>{const done=activeTasks.filter(t=>getStatus(t.id,d)==="done").length;return a+done;},0)/(thisWeekDates.length*Math.max(activeTasks.length,1))*100)}%`, icon:"📊", color:"#ff7eb3" },
+            ].map(s=>(
+              <div key={s.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:14, padding:18 }}>
+                <div style={{ fontSize:22, marginBottom:6 }}>{s.icon}</div>
+                <div style={{ fontFamily:"Syne,sans-serif", fontWeight:800, fontSize:22, color:s.color }}>{s.value}</div>
+                <div style={{ fontSize:11, color:"var(--text3)", marginTop:2 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
 
-      <div style={S.manageList}>
-        {activeTasks.map(task => (
-          <div key={task.id} style={{ ...S.manageCard, borderLeft: `4px solid ${task.color}` }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ ...S.dot, background: task.color, width: 12, height: 12 }} />
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>{task.name}</div>
-                <div style={{ fontSize: 11, color: "#888" }}>{task.category} · since {task.createdAt}</div>
+          {/* 7-day trend */}
+          <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:20, marginBottom:20 }}>
+            <div style={{ fontFamily:"Syne,sans-serif", fontWeight:700, fontSize:14, marginBottom:14 }}>7-Day Completion Trend</div>
+            <div style={{ display:"flex", alignItems:"flex-end", gap:6, height:80 }}>
+              {last7.map((v,i)=>{
+                const d = new Date(today); d.setDate(d.getDate()-6+i);
+                const label = DAY_NAMES[d.getDay()];
+                return (
+                  <div key={i} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
+                    <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700 }}>{v>0?`${v}%`:""}</div>
+                    <div style={{
+                      width:"100%", borderRadius:4,
+                      height: `${Math.max(v, 4)}%`,
+                      minHeight:4,
+                      background: v>=80?"var(--accent)":v>=50?"var(--accent2)":"var(--bg3)",
+                      transition:"height .5s ease",
+                    }} />
+                    <div style={{ fontSize:9, color:"var(--text3)" }}>{label}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* per-task streaks */}
+          <div style={{ fontFamily:"Syne,sans-serif", fontWeight:700, fontSize:14, marginBottom:12 }}>Task Streaks & Performance</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            {activeTasks.map(task=>{
+              const streak = calcStreak(task.id, state.logs);
+              const longest = calcLongestStreak(task.id, state.logs);
+              const monthStats = rangeStats(task.id, thisMonthDates);
+              const weekStats = rangeStats(task.id, thisWeekDates);
+              return (
+                <div key={task.id} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderLeft:`3px solid ${task.color}`, borderRadius:14, padding:16 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                      <div style={{ width:10, height:10, borderRadius:"50%", background:task.color }} />
+                      <div>
+                        <div style={{ fontWeight:700, fontSize:14 }}>{task.name}</div>
+                        <div style={{ fontSize:11, color:"var(--text3)" }}>{task.category} · {task.priority||"Medium"} priority</div>
+                      </div>
+                    </div>
+                    <div style={{ display:"flex", gap:16, flexWrap:"wrap" }}>
+                      <StatPill icon="🔥" label="Streak" value={`${streak}d`} color="#ffd166" />
+                      <StatPill icon="🏆" label="Best" value={`${longest}d`} color="#fb923c" />
+                      <StatPill icon="📅" label="This week" value={weekStats?`${weekStats.pct}%`:"—"} color={task.color} />
+                      <StatPill icon="🗓" label="This month" value={monthStats?`${monthStats.pct}%`:"—"} color={task.color} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function StatPill({ icon, label, value, color }) {
+  return (
+    <div style={{ textAlign:"center" }}>
+      <div style={{ fontSize:10, color:"var(--text3)", marginBottom:2 }}>{icon} {label}</div>
+      <div style={{ fontFamily:"Syne,sans-serif", fontWeight:800, fontSize:15, color }}>{value}</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+//  MANAGE VIEW
+// ─────────────────────────────────────────────
+function ManageView({ state, activeTasks, onEdit, onArchive, onUnarchive, onDelete }) {
+  const archived = state.tasks.filter(t=>t.archived);
+  return (
+    <div className="fade-up">
+      <div style={{ fontFamily:"Syne,sans-serif", fontWeight:800, fontSize:22, marginBottom:6 }}>Manage Tasks</div>
+      <div style={{ color:"var(--text2)", fontSize:13, marginBottom:24 }}>{activeTasks.length} active · {archived.length} archived</div>
+
+      {activeTasks.length===0 ? <EmptyState /> : (
+        <div style={{ display:"flex", flexDirection:"column", gap:10, marginBottom:32 }}>
+          {activeTasks.map(task=>(
+            <div key={task.id} style={{
+              background:"var(--bg2)", border:"1px solid var(--border)",
+              borderLeft:`3px solid ${task.color}`, borderRadius:14,
+              padding:"14px 18px", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10,
+            }}>
+              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                <div style={{ width:10, height:10, borderRadius:"50%", background:task.color }} />
+                <div>
+                  <div style={{ fontWeight:700, fontSize:14 }}>{task.name}</div>
+                  <div style={{ fontSize:11, color:"var(--text3)", marginTop:1 }}>
+                    {task.category} · <span style={{ color:PRIORITY_COLOR[task.priority]||"var(--text3)" }}>{task.priority||"Medium"}</span>
+                    {task.timeEst ? ` · ⏱ ${task.timeEst}` : ""}
+                    {` · since ${task.createdAt}`}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display:"flex", gap:8 }}>
+                <ActionBtn color="#6bceff" bg="rgba(107,206,255,0.1)" onClick={()=>onEdit({...task})}>✏️ Edit</ActionBtn>
+                <ActionBtn color="#ffd166" bg="rgba(255,209,102,0.1)" onClick={()=>onArchive(task.id)}>📦 Archive</ActionBtn>
+                <ActionBtn color="#ff6b6b" bg="rgba(255,107,107,0.1)" onClick={()=>onDelete(task.id)}>🗑</ActionBtn>
               </div>
             </div>
-            <div style={S.manageActions}>
-              <button style={S.editBtn} onClick={() => onEdit({...task})}>✏️ Edit</button>
-              <button style={S.archiveBtn} onClick={() => onArchive(task.id)}>📦 Archive</button>
-              <button style={S.deleteBtn} onClick={() => { if(confirm("Delete permanently?")) onDelete(task.id); }}>🗑</button>
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
-      {archivedTasks.length > 0 && (
+      {archived.length > 0 && (
         <>
-          <div style={{ ...S.viewTitle, marginTop: 32, fontSize: 14, color: "#555" }}>
-            Archived Tasks ({archivedTasks.length})
-          </div>
-          <div style={S.manageList}>
-            {archivedTasks.map(task => (
-              <div key={task.id} style={{ ...S.manageCard, opacity: 0.5, borderLeft: `4px solid #444` }}>
-                <div style={{ fontWeight: 600, fontSize: 13 }}>{task.name} <span style={{ fontSize: 11, color: "#666" }}>— {task.category}</span></div>
-                <button style={S.deleteBtn} onClick={() => { if(confirm("Delete permanently?")) onDelete(task.id); }}>🗑</button>
+          <div style={{ fontFamily:"Syne,sans-serif", fontWeight:700, fontSize:14, color:"var(--text3)", marginBottom:12 }}>Archived Tasks</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {archived.map(task=>(
+              <div key={task.id} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"12px 18px", display:"flex", justifyContent:"space-between", alignItems:"center", opacity:.5, flexWrap:"wrap", gap:8 }}>
+                <span style={{ fontSize:13, fontWeight:600 }}>{task.name} <span style={{ color:"var(--text3)", fontWeight:400 }}>— {task.category}</span></span>
+                <div style={{ display:"flex", gap:8 }}>
+                  <ActionBtn color="var(--accent)" bg="rgba(126,255,160,0.08)" onClick={()=>onUnarchive(task.id)}>♻️ Restore</ActionBtn>
+                  <ActionBtn color="#ff6b6b" bg="rgba(255,107,107,0.1)" onClick={()=>onDelete(task.id)}>🗑</ActionBtn>
+                </div>
               </div>
             ))}
           </div>
@@ -447,105 +1067,23 @@ function TasksView({ activeTasks, archivedTasks, onEdit, onArchive, onDelete }) 
   );
 }
 
-// ── RING SVG ──────────────────────────────────────────────────────────────────
-function Ring({ pct, color }) {
-  const r = 30, c = 2 * Math.PI * r;
-  const offset = c - (pct / 100) * c;
+function ActionBtn({ color, bg, onClick, children }) {
   return (
-    <svg width={80} height={80} viewBox="0 0 80 80">
-      <circle cx={40} cy={40} r={r} fill="none" stroke="#222" strokeWidth={8} />
-      <circle cx={40} cy={40} r={r} fill="none" stroke={color} strokeWidth={8}
-        strokeDasharray={c} strokeDashoffset={offset}
-        strokeLinecap="round" transform="rotate(-90 40 40)" />
-      <text x={40} y={45} textAnchor="middle" fill="#fff" fontSize={14} fontWeight={800}>{pct}%</text>
-    </svg>
+    <button onClick={onClick} style={{ padding:"7px 14px", background:bg, color, border:`1px solid ${color}30`, borderRadius:8, fontSize:12, fontWeight:700, cursor:"pointer" }}>
+      {children}
+    </button>
   );
 }
 
-// ── MODAL ─────────────────────────────────────────────────────────────────────
-function Modal({ title, onClose, children }) {
+// ─────────────────────────────────────────────
+//  EMPTY STATE
+// ─────────────────────────────────────────────
+function EmptyState() {
   return (
-    <div style={S.overlay} onClick={e => e.target===e.currentTarget && onClose()}>
-      <div style={S.modal}>
-        <div style={S.modalHeader}>
-          <span style={{ fontWeight: 800, fontSize: 16 }}>{title}</span>
-          <button style={S.closeBtn} onClick={onClose}>✕</button>
-        </div>
-        {children}
-      </div>
+    <div style={{ textAlign:"center", padding:"60px 20px", color:"var(--text3)" }}>
+      <div style={{ fontSize:40, marginBottom:12 }}>⚡</div>
+      <div style={{ fontFamily:"Syne,sans-serif", fontWeight:700, fontSize:16, marginBottom:6 }}>No tasks yet</div>
+      <div style={{ fontSize:13 }}>Click <b style={{ color:"var(--accent)" }}>＋ Add Task</b> to get started!</div>
     </div>
   );
 }
-
-function Empty() {
-  return <div style={S.empty}>No tasks yet. Click <b>＋ Add Task</b> to get started!</div>;
-}
-
-// ── STYLES ────────────────────────────────────────────────────────────────────
-const S = {
-  root: { minHeight:"100vh", background:"#0a0a0a", color:"#e8e8e8", fontFamily:"'DM Mono', 'Courier New', monospace", position:"relative", overflow:"hidden" },
-  grain: { position:"fixed", inset:0, backgroundImage:`url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E")`, pointerEvents:"none", zIndex:0 },
-  header: { display:"flex", justifyContent:"space-between", alignItems:"center", padding:"20px 28px", borderBottom:"1px solid #1e1e1e", background:"#0d0d0d", position:"relative", zIndex:1 },
-  headerLeft: { display:"flex", alignItems:"center", gap:12 },
-  logo: { fontSize:28, color:"#6EE7B7" },
-  appName: { fontSize:20, fontWeight:900, letterSpacing:4, color:"#f0f0f0" },
-  appSub: { fontSize:10, color:"#555", letterSpacing:2 },
-  headerRight: { display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" },
-  datePick: { background:"#111", border:"1px solid #2a2a2a", color:"#ccc", padding:"8px 12px", borderRadius:6, fontSize:13, fontFamily:"inherit" },
-  addBtn: { background:"#6EE7B7", color:"#0a0a0a", border:"none", padding:"9px 18px", borderRadius:6, fontWeight:800, fontSize:13, cursor:"pointer", letterSpacing:1 },
-  nav: { display:"flex", gap:0, borderBottom:"1px solid #1a1a1a", background:"#0d0d0d", position:"relative", zIndex:1 },
-  navBtn: { flex:1, padding:"13px 0", background:"transparent", border:"none", color:"#555", fontSize:12, fontWeight:700, cursor:"pointer", letterSpacing:1, borderBottom:"2px solid transparent", transition:"all .2s" },
-  navActive: { color:"#6EE7B7", borderBottom:"2px solid #6EE7B7" },
-  main: { padding:"24px 20px", maxWidth:1100, margin:"0 auto", position:"relative", zIndex:1 },
-  viewTitle: { display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:16, paddingBottom:10, borderBottom:"1px solid #1a1a1a" },
-  viewSub: { fontSize:12, color:"#555" },
-  progressBar: { height:4, background:"#1a1a1a", borderRadius:2, marginBottom:24, overflow:"hidden" },
-  progressFill: { height:"100%", background:"linear-gradient(90deg,#6EE7B7,#93C5FD)", borderRadius:2, transition:"width .5s ease" },
-  taskGrid: { display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))", gap:14, marginTop:16 },
-  taskCard: { background:"#111", borderRadius:10, padding:"16px 14px", border:"1px solid #1e1e1e" },
-  taskCardTop: { display:"flex", alignItems:"flex-start", gap:10, marginBottom:14 },
-  dot: { width:10, height:10, borderRadius:"50%", flexShrink:0, marginTop:4 },
-  taskName: { fontWeight:700, fontSize:14, lineHeight:1.3 },
-  taskCat: { fontSize:11, color:"#666", marginTop:2 },
-  btnRow: { display:"flex", gap:8 },
-  statusBtn: { flex:1, padding:"7px 0", border:"1px solid #2a2a2a", background:"transparent", color:"#777", borderRadius:6, fontSize:11, fontWeight:700, cursor:"pointer", transition:"all .15s", letterSpacing:.5 },
-  btnDone: { background:"#6EE7B7", color:"#0a0a0a", border:"1px solid #6EE7B7" },
-  btnSkip: { background:"#2a2a2a", color:"#aaa", border:"1px solid #333" },
-  // table
-  table: { width:"100%", borderCollapse:"collapse", fontSize:12 },
-  th: { padding:"10px 8px", color:"#888", fontWeight:700, textAlign:"center", borderBottom:"1px solid #1e1e1e", whiteSpace:"nowrap", letterSpacing:.5 },
-  td: { padding:"8px", borderBottom:"1px solid #111", textAlign:"center", cursor:"pointer" },
-  cell: { width:28, height:28, borderRadius:5, display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto", fontSize:13, fontWeight:700, cursor:"pointer", transition:"transform .1s" },
-  // summary cards
-  summaryGrid: { display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))", gap:12, marginTop:24 },
-  summaryCard: { background:"#111", borderRadius:10, padding:"14px", border:"1px solid #1e1e1e" },
-  miniBar: { height:3, background:"#1a1a1a", borderRadius:2, marginTop:8, overflow:"hidden" },
-  miniFill: { height:"100%", borderRadius:2, transition:"width .5s ease" },
-  // ring row
-  ringRow: { display:"flex", flexWrap:"wrap", gap:16, marginBottom:24 },
-  ringCard: { background:"#111", borderRadius:10, padding:"16px", border:"1px solid #1e1e1e", textAlign:"center", minWidth:100 },
-  // heat
-  heatSection: { background:"#0f0f0f", borderRadius:10, padding:"16px", marginBottom:14, border:"1px solid #1a1a1a" },
-  heatGrid: { display:"flex", flexWrap:"wrap", gap:4 },
-  heatCell: { width:28, height:28, borderRadius:4, display:"flex", alignItems:"center", justifyContent:"center", transition:"opacity .2s" },
-  // manage
-  manageList: { display:"flex", flexDirection:"column", gap:10 },
-  manageCard: { background:"#111", borderRadius:10, padding:"14px 16px", border:"1px solid #1e1e1e", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10 },
-  manageActions: { display:"flex", gap:8 },
-  editBtn: { padding:"6px 12px", background:"#1e2a20", color:"#6EE7B7", border:"1px solid #2a3a2a", borderRadius:6, fontSize:12, cursor:"pointer", fontWeight:700 },
-  archiveBtn: { padding:"6px 12px", background:"#1e1e28", color:"#93C5FD", border:"1px solid #2a2a3a", borderRadius:6, fontSize:12, cursor:"pointer", fontWeight:700 },
-  deleteBtn: { padding:"6px 10px", background:"#281e1e", color:"#FCA5A5", border:"1px solid #3a2a2a", borderRadius:6, fontSize:12, cursor:"pointer" },
-  // modal
-  overlay: { position:"fixed", inset:0, background:"rgba(0,0,0,.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:100, backdropFilter:"blur(4px)" },
-  modal: { background:"#111", border:"1px solid #222", borderRadius:14, padding:"24px", width:"min(90vw,400px)", boxShadow:"0 30px 80px rgba(0,0,0,.8)" },
-  modalHeader: { display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 },
-  closeBtn: { background:"transparent", border:"none", color:"#666", fontSize:18, cursor:"pointer" },
-  label: { display:"block", fontSize:11, color:"#888", fontWeight:700, letterSpacing:1, marginBottom:5, marginTop:14 },
-  input: { width:"100%", background:"#0d0d0d", border:"1px solid #2a2a2a", color:"#e0e0e0", padding:"10px 12px", borderRadius:7, fontSize:13, fontFamily:"inherit", boxSizing:"border-box", outline:"none" },
-  colorRow: { display:"flex", gap:10, flexWrap:"wrap", marginTop:4 },
-  colorDot: { width:26, height:26, borderRadius:"50%", cursor:"pointer", transition:"transform .15s", outlineOffset:3 },
-  modalBtn: { marginTop:20, width:"100%", padding:"11px", background:"#6EE7B7", color:"#0a0a0a", border:"none", borderRadius:8, fontWeight:800, fontSize:14, cursor:"pointer", letterSpacing:1 },
-  // toast
-  toast: { position:"fixed", bottom:28, left:"50%", transform:"translateX(-50%)", background:"#6EE7B7", color:"#0a0a0a", padding:"10px 24px", borderRadius:8, fontWeight:800, fontSize:13, zIndex:200, letterSpacing:1, boxShadow:"0 8px 30px rgba(0,0,0,.5)" },
-  empty: { textAlign:"center", color:"#444", padding:"40px 0", fontSize:14 },
-};
