@@ -241,6 +241,29 @@ function Sparkline({ data, color }) {
 // ─────────────────────────────────────────────
 //  MAIN APP
 // ─────────────────────────────────────────────
+// Inject styles
+const styleEl = document.createElement('style');
+styleEl.textContent = `
+  :root {
+    --bg: #070709; --bg2: #0e0e12; --bg3: #13131a;
+    --border: rgba(255,255,255,0.07);
+    --border-bright: rgba(255,255,255,0.14);
+    --text: #f0f0f4; --text2: #8888a0; --text3: #44445a;
+    --accent: #7effa0; --accent2: #5b8fff; --accent3: #ff7eb3;
+    --high: #ff6b6b; --med: #ffd166; --low: #6bceff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #070709; color: #f0f0f4; font-family: 'DM Sans', sans-serif; }
+  @keyframes fadeUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
+  @keyframes confettiFall { 0% { transform:translateY(-10px) rotate(0deg); opacity:1; } 100% { transform:translateY(100vh) rotate(720deg); opacity:0; } }
+  @keyframes streakBounce { 0%,100% { transform:scale(1); } 50% { transform:scale(1.15); } }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+  @keyframes toastSlide { from { transform:translateX(-50%) translateY(20px); opacity:0; } to { transform:translateX(-50%) translateY(0); opacity:1; } }
+  @keyframes scaleIn { from { opacity:0; transform:scale(0.92); } to { opacity:1; transform:scale(1); } }
+  .fade-up { animation: fadeUp 0.4s ease forwards; }
+  .scale-in { animation: scaleIn 0.3s cubic-bezier(0.34,1.56,0.64,1) forwards; }
+`;
+document.head.appendChild(styleEl);
 export default function App() {
   const [state, setState] = useState(() => loadState() || initState());
   const [view, setView] = useState("day");
