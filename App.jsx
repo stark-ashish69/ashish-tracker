@@ -1,5 +1,25 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
+import {
+  auth,
+  db,
+  googleProvider,
+  isFirebaseConfigured,
+} from "./firebase.js";
+
+import {
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+} from "firebase/auth";
+
+import {
+  doc,
+  getDoc,
+  setDoc,
+  serverTimestamp,
+} from "firebase/firestore";
+
 // ─────────────────────────────────────────────
 //  CONSTANTS
 // ─────────────────────────────────────────────
@@ -277,8 +297,25 @@ export default function App() {
   const [reminderTime, setReminderTime] = useState(localStorage.getItem("stark_reminder")||"");
   const [showReminder, setShowReminder] = useState(false);
   const confettiTimer = useRef(null);
+  const [authUser, setAuthUser] = useState(null);
+const [authReady, setAuthReady] = useState(false);
+const [syncStatus, setSyncStatus] = useState("Not synced");
+
+const lastCloudJson = useRef("");
+const applyingCloudState = useRef(false);
+
+const trackerDoc = (uid) =>
+  doc(db, "trackers", uid);
 
   useEffect(() => { saveState(state); }, [state]);
+  useEffect(() => {
+  if (!isFirebaseConfigured) return;
+
+  return onAuthStateChanged(auth, (user) => {
+    setAuthUser(user);
+    setAuthReady(true);
+  });
+}, []);
 
   const showToast = useCallback((msg) => {
     setToast(msg);
@@ -394,6 +431,20 @@ export default function App() {
     setShowReminder(false);
     showToast(`🔔 Reminder set for ${reminderTime}`);
   };
+  const signInWithGoogle = async () => {
+  try {
+    await signInWithPopup(auth, googleProvider);
+    showToast("Google Sign-In successful");
+  } catch (err) {
+    console.error(err);
+    showToast("Sign-In failed");
+  }
+};
+
+const signOutOfGoogle = async () => {
+  await signOut(auth);
+  showToast("Signed out");
+};
 
   // ─────────────────────────────────────────────
   //  RENDER
@@ -426,6 +477,22 @@ export default function App() {
           </div>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+          {!authUser && (
+  <button
+    onClick={signInWithGoogle}
+    style={{
+      background:"linear-gradient(135deg,var(--accent),var(--accent2))",
+      color:"#07070e",
+      border:"none",
+      padding:"8px 14px",
+      borderRadius:10,
+      fontWeight:700,
+      cursor:"pointer"
+    }}
+  >
+    Sign in with Google
+  </button>
+)}
           <input type="date" value={selectedDate} onChange={e=>setSelectedDate(e.target.value)}
             style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text2)", padding:"8px 12px", borderRadius:10, fontSize:13, fontFamily:"DM Sans,sans-serif" }}
           />
