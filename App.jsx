@@ -242,9 +242,28 @@ export default function App() {
     setPersistence(auth, browserLocalPersistence).catch(()=>{});
 
     // Handle returning from a redirect sign-in
-    getRedirectResult(auth)
-      .then(result => { if (result?.user) showToast("✅ Signed in! Syncing…"); })
-      .catch(()=>{});
+   getRedirectResult(auth)
+  .then((result) => {
+    console.log("=== REDIRECT RESULT ===");
+    console.log(result);
+  })
+  .catch((error) => {
+    console.error("=== REDIRECT ERROR ===");
+    console.error(error);
+    console.error("Code:", error.code);
+    console.error("Message:", error.message);
+  });
+
+onAuthStateChanged(auth, (user) => {
+  console.log("=== AUTH STATE CHANGED ===");
+  console.log(user);
+
+  if (user) {
+    console.log("Logged in:", user.uid, user.email);
+  } else {
+    console.log("No authenticated user");
+  }
+});
 
     // Auth state listener — fires immediately if already signed in
     return onAuthStateChanged(auth, (user) => {
