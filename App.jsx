@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { auth, db, googleProvider, isFirebaseConfigured } from "./firebase.js";
-import { onAuthStateChanged, signInWithPopup, signOut } from "firebase/auth";
+import { onAuthStateChanged, signInWithRedirect, signInWithPopup, getRedirectResult, signOut } from "firebase/auth";
 import { doc, setDoc, onSnapshot } from "firebase/firestore";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -235,7 +235,9 @@ export default function App() {
   // ── Auth listener ──
   useEffect(()=>{
     if (!isFirebaseConfigured || !auth) return;
-    return onAuthStateChanged(auth, user => {
+    return onAuthStateChanged getRedirectResult(auth).then(result => {
+  if (result?.user) showToast("✅ Signed in! Syncing…");
+}).catch(()=>{});(auth, user => {
       setAuthUser(user);
       if (user) setupSync(user.uid);
       else { if(unsub.current){unsub.current();unsub.current=null;} setSyncStatus("local"); }
@@ -359,7 +361,7 @@ export default function App() {
               ? <button onClick={()=>signOut(auth).then(()=>showToast("Signed out"))} style={{background:"var(--bg3)",border:`1px solid var(--border)`,color:"var(--text2)",padding:"7px 12px",borderRadius:9,fontSize:12,cursor:"pointer",fontWeight:600}}>
                   {authUser.photoURL && <img src={authUser.photoURL} style={{width:18,height:18,borderRadius:"50%",marginRight:5,verticalAlign:"middle"}} alt=""/>}Sign out
                 </button>
-              : <button onClick={()=>signInWithPopup(auth,googleProvider).then(()=>showToast("✅ Signed in! Syncing…")).catch(()=>showToast("Sign-in failed"))} style={{background:"#4285f4",color:"#fff",border:"none",padding:"7px 12px",borderRadius:9,fontSize:12,cursor:"pointer",fontWeight:700}}>
+              : <button onClick={()=>signInWithRedirect(auth,googleProvider).catch(()=>showToast("Sign-in failed"))} style={{background:"#4285f4",color:"#fff",border:"none",padding:"7px 12px",borderRadius:9,fontSize:12,cursor:"pointer",fontWeight:700}}>
                   🔐 Sign in to Sync
                 </button>
           )}
