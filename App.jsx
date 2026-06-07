@@ -63,7 +63,7 @@ const mkDefaultTasks = () => [
   { id:8, name:"Morning Run / Walk 1hr",    category:"Fitness",  priority:"High",   color:"#db2777", timeEst:"1 hr",    createdAt:TODAY(), archived:false },
 ];
 
-const initState = () => ({ tasks:mkDefaultTasks(), logs:{}, notes:{}, weekGoals:{}, nextId:9 });
+const initState = () => ({ tasks:[], logs:{}, notes:{}, weekGoals:{}, nextId:1 });
 const loadLocal  = (uid) => { try { return JSON.parse(localStorage.getItem(LOCAL_KEY(uid)))||null; } catch { return null; } };
 const saveLocal  = (uid, s) => localStorage.setItem(LOCAL_KEY(uid), JSON.stringify(s));
 
@@ -393,6 +393,7 @@ export default function App() {
                   }} style={{background:"#4285f4",color:"#fff",border:"none",padding:"7px 12px",borderRadius:9,fontSize:12,cursor:"pointer",fontWeight:700}}>
                     🔐 Sign in to Sync
                   </button>
+          )}
           <button onClick={()=>setShowReminder(true)} style={{background:"var(--bg3)",border:`1px solid var(--border)`,color:"var(--text2)",padding:"7px 10px",borderRadius:9,fontSize:15,cursor:"pointer"}}>🔔</button>
           <button onClick={()=>setShowAdd(true)} style={{background:"var(--accent)",color:dark?"#07070a":"#fff",border:"none",padding:"8px 16px",borderRadius:9,fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"Syne,sans-serif"}}>＋ Add Task</button>
         </div>
