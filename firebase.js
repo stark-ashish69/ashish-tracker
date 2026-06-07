@@ -3,7 +3,7 @@ import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
+  apiKey:            "AIzaSyBWpHk6QdAnMhzQrsKz1ham01YE9c1r-go",
   authDomain:        "stark-tracker.firebaseapp.com",
   projectId:         "stark-tracker",
   storageBucket:     "stark-tracker.firebasestorage.app",
