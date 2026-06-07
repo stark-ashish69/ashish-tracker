@@ -234,13 +234,18 @@ export default function App() {
   },[dark]);
 
   // ── Auth listener ──
-  // ── Handle redirect result FIRST, separately from auth state ──
+  // ── Handle redirect result on page load ──
   useEffect(()=>{
     if (!isFirebaseConfigured || !auth) return;
     getRedirectResult(auth)
-      .then(result => { if (result?.user) showToast("✅ Signed in! Syncing…"); })
+      .then(result => {
+        if (result?.user) showToast("✅ Signed in! Syncing…");
+      })
       .catch(err => {
-        if (err.code !== "auth/no-current-user") showToast("Sign-in failed: " + err.code);
+        // auth/no-current-user just means no redirect in progress — safe to ignore
+        if (err.code && err.code !== "auth/no-current-user") {
+          console.error("Redirect result error:", err.code);
+        }
       });
   }, []);
 
@@ -381,7 +386,7 @@ export default function App() {
                   </div>
                   <button onClick={()=>signOut(auth).then(()=>showToast("Signed out"))} style={{background:"var(--bg3)",border:`1px solid var(--border)`,color:"var(--text2)",padding:"5px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontWeight:600,marginLeft:2}}>Sign out</button>
                 </div>
-              : <button onClick={()=>signInWithPopup(auth,googleProvider).then(()=>showToast("✅ Signed in! Syncing…")).catch(e=>showToast("Sign-in failed: "+e.code))} style={{background:"#4285f4",color:"#fff",border:"none",padding:"7px 12px",borderRadius:9,fontSize:12,cursor:"pointer",fontWeight:700}}>
+              : <button onClick={()=>{ try{ signInWithRedirect(auth,googleProvider); } catch(e){ showToast("Sign-in failed"); } }} style={{background:"#4285f4",color:"#fff",border:"none",padding:"7px 12px",borderRadius:9,fontSize:12,cursor:"pointer",fontWeight:700}}>
                   🔐 Sign in to Sync
                 </button>
           )}
