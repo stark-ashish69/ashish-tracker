@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { auth, db, googleProvider, isFirebaseConfigured } from "./firebase.js";
-import { onAuthStateChanged, signInWithRedirect, signInWithPopup, getRedirectResult, signOut } from "firebase/auth";
+import { onAuthStateChanged, signInWithRedirect, signInWithPopup, getRedirectResult, signOut, browserLocalPersistence, setPersistence } from "firebase/auth";
 import { doc, setDoc, onSnapshot } from "firebase/firestore";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -234,18 +234,19 @@ export default function App() {
   },[dark]);
 
   // ── Auth listener ──
-  // ── Auth: handle redirect result + auth state in correct order ──
+  // ── Auth: set persistence then wire up state listener ──
   useEffect(()=>{
     if (!isFirebaseConfigured || !auth) return;
 
-    // First check if we're returning from a redirect sign-in
-    getRedirectResult(auth)
-      .then(result => {
-        if (result?.user) showToast("✅ Signed in! Syncing…");
-      })
-      .catch(() => {}); // silently ignore — just means no redirect was in progress
+    // Force local persistence so session survives page reloads on all browsers
+    setPersistence(auth, browserLocalPersistence).catch(()=>{});
 
-    // Then listen for auth state changes (fires for both redirect & popup)
+    // Handle returning from a redirect sign-in
+    getRedirectResult(auth)
+      .then(result => { if (result?.user) showToast("✅ Signed in! Syncing…"); })
+      .catch(()=>{});
+
+    // Auth state listener — fires immediately if already signed in
     return onAuthStateChanged(auth, (user) => {
       setAuthUser(user);
       if (user) {
@@ -386,22 +387,12 @@ export default function App() {
                   <button onClick={()=>signOut(auth).then(()=>showToast("👋 Signed out")).catch(()=>{})} style={{background:"var(--bg3)",border:`1px solid var(--border)`,color:"var(--text2)",padding:"5px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontWeight:600,marginLeft:2}}>Sign out</button>
                 </div>
               : <button onClick={()=>{
-                    signInWithPopup(auth, googleProvider)
-                      .then(() => showToast("✅ Signed in! Syncing…"))
-                      .catch(err => {
-                        if (err.code === "auth/popup-blocked" || err.code === "auth/popup-closed-by-user") {
-                          // Popup blocked (common on mobile) — fall back to redirect
-                          signInWithRedirect(auth, googleProvider);
-                        } else {
-                          showToast("Sign-in failed: " + err.code);
-                        }
-                      });
+                    setPersistence(auth, browserLocalPersistence)
+                      .then(() => signInWithRedirect(auth, googleProvider))
+                      .catch(() => signInWithRedirect(auth, googleProvider));
                   }} style={{background:"#4285f4",color:"#fff",border:"none",padding:"7px 12px",borderRadius:9,fontSize:12,cursor:"pointer",fontWeight:700}}>
-                  🔐 Sign in to Sync
-                </button>
-          )}
-
-          <input type="date" value={selDate} onChange={e=>setSelDate(e.target.value)} style={{background:"var(--bg3)",border:`1px solid var(--border)`,color:"var(--text2)",padding:"7px 10px",borderRadius:9,fontSize:13}}/>
+                    🔐 Sign in to Sync
+                  </button>
           <button onClick={()=>setShowReminder(true)} style={{background:"var(--bg3)",border:`1px solid var(--border)`,color:"var(--text2)",padding:"7px 10px",borderRadius:9,fontSize:15,cursor:"pointer"}}>🔔</button>
           <button onClick={()=>setShowAdd(true)} style={{background:"var(--accent)",color:dark?"#07070a":"#fff",border:"none",padding:"8px 16px",borderRadius:9,fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"Syne,sans-serif"}}>＋ Add Task</button>
         </div>
