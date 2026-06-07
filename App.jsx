@@ -225,6 +225,7 @@ export default function App() {
   const confTmr = useRef(null);
   const saveTmr = useRef(null);
   const unsub   = useRef(null);
+  const isRemoteUpdate = useRef(false);
 
   // ── Theme toggle ──
   useEffect(()=>{
@@ -254,6 +255,7 @@ export default function App() {
     unsub.current = onSnapshot(ref, snap => {
       if (snap.exists()) {
         const data = snap.data();
+        isRemoteUpdate.current = true;
         setState(data);
         saveLocal(data);
       } else {
@@ -265,9 +267,13 @@ export default function App() {
     }, () => setSyncStatus("offline"));
   };
 
-  // ── Save (debounced 1.2s) ──
+  // ── Save (debounced 1.2s) — skip if this was a remote update ──
   useEffect(()=>{
     saveLocal(state);
+    if (isRemoteUpdate.current) {
+      isRemoteUpdate.current = false;
+      return;
+    }
     if (!authUser || !db || !isFirebaseConfigured) return;
     clearTimeout(saveTmr.current);
     setSyncStatus("saving");
@@ -359,9 +365,14 @@ export default function App() {
           {/* Google auth */}
           {isFirebaseConfigured && (
             authUser
-              ? <button onClick={()=>signOut(auth).then(()=>showToast("Signed out"))} style={{background:"var(--bg3)",border:`1px solid var(--border)`,color:"var(--text2)",padding:"7px 12px",borderRadius:9,fontSize:12,cursor:"pointer",fontWeight:600}}>
-                  {authUser.photoURL && <img src={authUser.photoURL} style={{width:18,height:18,borderRadius:"50%",marginRight:5,verticalAlign:"middle"}} alt=""/>}Sign out
-                </button>
+              ? <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  {authUser.photoURL && <img src={authUser.photoURL} referrerPolicy="no-referrer" style={{width:32,height:32,borderRadius:"50%",border:"2px solid var(--border)"}} alt={authUser.displayName||""}/>}
+                  <div style={{display:"flex",flexDirection:"column",lineHeight:1.2}}>
+                    <span style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>{authUser.displayName||"User"}</span>
+                    <span style={{fontSize:10,color:"var(--text3)"}}>{authUser.email}</span>
+                  </div>
+                  <button onClick={()=>signOut(auth).then(()=>showToast("Signed out"))} style={{background:"var(--bg3)",border:`1px solid var(--border)`,color:"var(--text2)",padding:"5px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontWeight:600,marginLeft:2}}>Sign out</button>
+                </div>
               : <button onClick={()=>signInWithRedirect(auth,googleProvider).catch(()=>showToast("Sign-in failed"))} style={{background:"#4285f4",color:"#fff",border:"none",padding:"7px 12px",borderRadius:9,fontSize:12,cursor:"pointer",fontWeight:700}}>
                   🔐 Sign in to Sync
                 </button>
