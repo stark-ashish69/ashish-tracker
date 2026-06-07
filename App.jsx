@@ -6,7 +6,7 @@ import { doc, setDoc, onSnapshot } from "firebase/firestore";
 // ─────────────────────────────────────────────────────────────────────────────
 //  CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
-const LOCAL_KEY = "stark_tracker_v3";
+const LOCAL_KEY = (uid) => `stark_tracker_v3_${uid || "guest"}`;
 
 const QUOTES = [
   "Small steps every day. Big results every year.",
@@ -64,8 +64,8 @@ const mkDefaultTasks = () => [
 ];
 
 const initState = () => ({ tasks:mkDefaultTasks(), logs:{}, notes:{}, weekGoals:{}, nextId:9 });
-const loadLocal  = ()   => { try { return JSON.parse(localStorage.getItem(LOCAL_KEY))||null; } catch { return null; } };
-const saveLocal  = (s)  => localStorage.setItem(LOCAL_KEY, JSON.stringify(s));
+const loadLocal  = (uid) => { try { return JSON.parse(localStorage.getItem(LOCAL_KEY(uid)))||null; } catch { return null; } };
+const saveLocal  = (uid, s) => localStorage.setItem(LOCAL_KEY(uid), JSON.stringify(s));
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  STREAKS
@@ -210,7 +210,7 @@ export default function App() {
   injectCSS();
 
   const [dark, setDark]         = useState(()=>localStorage.getItem("stark_theme")==="dark");
-  const [state, setState]       = useState(()=>loadLocal()||initState());
+  const [state, setState]       = useState(()=>loadLocal("guest")||initState());
   const [view, setView]         = useState("day");
   const [selDate, setSelDate]   = useState(TODAY());
   const [showAdd, setShowAdd]   = useState(false);
@@ -270,10 +270,10 @@ export default function App() {
         const data = snap.data();
         isRemoteUpdate.current = true;
         setState(data);
-        saveLocal(data);
+        saveLocal(uid, data);
       } else {
         // first login — push local state
-        const local = loadLocal() || initState();
+        const local = loadLocal(uid) || initState();
         setDoc(ref, local);
       }
       setSyncStatus("synced");
@@ -282,7 +282,7 @@ export default function App() {
 
   // ── Save (debounced 1.2s) — skip if this was a remote update ──
   useEffect(()=>{
-    saveLocal(state);
+    saveLocal(authUser?.uid || "guest", state);
     if (isRemoteUpdate.current) {
       isRemoteUpdate.current = false;
       return;
@@ -384,9 +384,18 @@ export default function App() {
                     <span style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>{authUser.displayName||"User"}</span>
                     <span style={{fontSize:10,color:"var(--text3)"}}>{authUser.email}</span>
                   </div>
-                  <button onClick={()=>signOut(auth).then(()=>showToast("Signed out"))} style={{background:"var(--bg3)",border:`1px solid var(--border)`,color:"var(--text2)",padding:"5px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontWeight:600,marginLeft:2}}>Sign out</button>
+                  <button onClick={()=>signOut(auth).then(()=>{ setState(initState()); showToast("Signed out"); })} style={{background:"var(--bg3)",border:`1px solid var(--border)`,color:"var(--text2)",padding:"5px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontWeight:600,marginLeft:2}}>Sign out</button>
                 </div>
-              : <button onClick={()=>{ try{ signInWithRedirect(auth,googleProvider); } catch(e){ showToast("Sign-in failed"); } }} style={{background:"#4285f4",color:"#fff",border:"none",padding:"7px 12px",borderRadius:9,fontSize:12,cursor:"pointer",fontWeight:700}}>
+              : <button onClick={()=>{
+                    signInWithPopup(auth, googleProvider)
+                      .catch(err => {
+                        if (err.code === "auth/popup-blocked" || err.code === "auth/popup-closed-by-user") {
+                          signInWithRedirect(auth, googleProvider);
+                        } else {
+                          showToast("Sign-in failed: " + err.code);
+                        }
+                      });
+                  }} style={{background:"#4285f4",color:"#fff",border:"none",padding:"7px 12px",borderRadius:9,fontSize:12,cursor:"pointer",fontWeight:700}}>
                   🔐 Sign in to Sync
                 </button>
           )}
