@@ -233,17 +233,17 @@ export default function App() {
   },[dark]);
 
   // ── Auth listener ──
-  useEffect(()=>{
-    if (!isFirebaseConfigured || !auth) return;
-    return onAuthStateChanged;
-      getRedirectResult(auth).then(result => {
-  if (result?.user) showToast("✅ Signed in! Syncing…");
-}).catch(()=>{});(auth, user => {
-      setAuthUser(user);
-      if (user) setupSync(user.uid);
-      else { if(unsub.current){unsub.current();unsub.current=null;} setSyncStatus("local"); }
-    });
-  },[]);
+ useEffect(()=>{
+  if (!isFirebaseConfigured || !auth) return;
+  return onAuthStateChanged(auth, (user) => {
+    getRedirectResult(auth).then(result => {
+      if (result?.user) showToast("✅ Signed in! Syncing…");
+    }).catch(()=>{});
+    setAuthUser(user);
+    if (user) setupSync(user.uid);
+    else { if(unsub.current){unsub.current();unsub.current=null;} setSyncStatus("local"); }
+  });
+},[]);
 
   // ── Firestore real-time sync ──
   const setupSync = (uid) => {
