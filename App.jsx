@@ -234,30 +234,29 @@ export default function App() {
   },[dark]);
 
   // ── Auth listener ──
-  // ── Handle redirect result on page load ──
+  // ── Auth: handle redirect result + auth state in correct order ──
   useEffect(()=>{
     if (!isFirebaseConfigured || !auth) return;
+
+    // First check if we're returning from a redirect sign-in
     getRedirectResult(auth)
       .then(result => {
         if (result?.user) showToast("✅ Signed in! Syncing…");
       })
-      .catch(err => {
-        // auth/no-current-user just means no redirect in progress — safe to ignore
-        if (err.code && err.code !== "auth/no-current-user") {
-          console.error("Redirect result error:", err.code);
-        }
-      });
-  }, []);
+      .catch(() => {}); // silently ignore — just means no redirect was in progress
 
-  // ── Auth state listener ──
-  useEffect(()=>{
-    if (!isFirebaseConfigured || !auth) return;
+    // Then listen for auth state changes (fires for both redirect & popup)
     return onAuthStateChanged(auth, (user) => {
       setAuthUser(user);
-      if (user) setupSync(user.uid);
-      else { if(unsub.current){unsub.current();unsub.current=null;} setSyncStatus("local"); }
+      if (user) {
+        setupSync(user.uid);
+      } else {
+        if (unsub.current) { unsub.current(); unsub.current = null; }
+        setSyncStatus("local");
+        setState(initState());
+      }
     });
-  },[]);
+  }, []);
 
   // ── Firestore real-time sync ──
   const setupSync = (uid) => {
@@ -384,12 +383,14 @@ export default function App() {
                     <span style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>{authUser.displayName||"User"}</span>
                     <span style={{fontSize:10,color:"var(--text3)"}}>{authUser.email}</span>
                   </div>
-                  <button onClick={()=>signOut(auth).then(()=>{ setState(initState()); showToast("Signed out"); })} style={{background:"var(--bg3)",border:`1px solid var(--border)`,color:"var(--text2)",padding:"5px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontWeight:600,marginLeft:2}}>Sign out</button>
+                  <button onClick={()=>signOut(auth).then(()=>showToast("👋 Signed out")).catch(()=>{})} style={{background:"var(--bg3)",border:`1px solid var(--border)`,color:"var(--text2)",padding:"5px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontWeight:600,marginLeft:2}}>Sign out</button>
                 </div>
               : <button onClick={()=>{
                     signInWithPopup(auth, googleProvider)
+                      .then(() => showToast("✅ Signed in! Syncing…"))
                       .catch(err => {
                         if (err.code === "auth/popup-blocked" || err.code === "auth/popup-closed-by-user") {
+                          // Popup blocked (common on mobile) — fall back to redirect
                           signInWithRedirect(auth, googleProvider);
                         } else {
                           showToast("Sign-in failed: " + err.code);
