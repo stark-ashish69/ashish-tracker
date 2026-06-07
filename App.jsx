@@ -235,7 +235,7 @@ export default function App() {
   // ── Auth listener ──
   useEffect(()=>{
     if (!isFirebaseConfigured || !auth) return;
-    return onAuthStateChanged:
+    return onAuthStateChanged;
       getRedirectResult(auth).then(result => {
   if (result?.user) showToast("✅ Signed in! Syncing…");
 }).catch(()=>{});(auth, user => {
