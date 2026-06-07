@@ -4,7 +4,7 @@ import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey:            "AIzaSyBWpHk6QdAnMhzQrsKz1ham01YE9c1r-go",
-  authDomain:        "stark-tracker.firebaseapp.com",
+  authDomain:        "ashish-tracker.vercel.app",
   projectId:         "stark-tracker",
   storageBucket:     "stark-tracker.firebasestorage.app",
   messagingSenderId: "282360696506",
